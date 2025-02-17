@@ -103,7 +103,7 @@ export default function Home() {
 				</section>
 
 				{/* Mobile warning */}
-				<div className="lg:hidden text-center p-8 space-y-4 border rounded-lg bg-card">
+				<div className="md:hidden text-center p-8 space-y-4 border rounded-lg bg-card">
 					{/* biome-ignore lint/a11y/noSvgWithoutTitle: <explanation> */}
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
@@ -128,7 +128,7 @@ export default function Home() {
 				</div>
 
 				{/* Main Content */}
-				<div className="grid gap-8 hidden lg:block">
+				<div className="grid gap-8 hidden md:block">
 					{/* Dropzone with subtle label */}
 					<div className="relative">
 						<span className="absolute -top-3 left-4 px-2 text-xs text-muted-foreground bg-background">
