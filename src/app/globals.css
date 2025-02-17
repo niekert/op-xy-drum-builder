@@ -2,20 +2,108 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@layer base {
+	:root {
+		/* TE-inspired colors - more stark contrast and industrial feel */
+		--background: 0 0% 100%;
+		--foreground: 0 0% 0%;
+		--card: 0 0% 98%;
+		--card-foreground: 0 0% 0%;
+		--popover: 0 0% 100%;
+		--popover-foreground: 0 0% 0%;
+		--primary: 0 0% 0%;
+		--primary-foreground: 0 0% 100%;
+		--secondary: 0 0% 96%;
+		--secondary-foreground: 0 0% 0%;
+		--muted: 0 0% 96%;
+		--muted-foreground: 0 0% 40%;
+		--accent: 0 0% 94%;
+		--accent-foreground: 0 0% 0%;
+		--destructive: 0 84.2% 60.2%;
+		--destructive-foreground: 0 0% 100%;
+		--border: 0 0% 90%;
+		--input: 0 0% 90%;
+		--ring: 0 0% 0%;
+		--radius: 0.25rem;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:root:not(.light) {
+			--background: 0 0% 0%;
+			--foreground: 0 0% 100%;
+			--card: 0 0% 2%;
+			--card-foreground: 0 0% 100%;
+			--popover: 0 0% 0%;
+			--popover-foreground: 0 0% 100%;
+			--primary: 0 0% 100%;
+			--primary-foreground: 0 0% 0%;
+			--secondary: 0 0% 8%;
+			--secondary-foreground: 0 0% 100%;
+			--muted: 0 0% 8%;
+			--muted-foreground: 0 0% 60%;
+			--accent: 0 0% 12%;
+			--accent-foreground: 0 0% 100%;
+			--destructive: 0 62.8% 30.6%;
+			--destructive-foreground: 0 0% 100%;
+			--border: 0 0% 15%;
+			--input: 0 0% 15%;
+			--ring: 0 0% 100%;
+		}
+	}
+
+	.dark {
+		--background: 0 0% 0%;
+		--foreground: 0 0% 100%;
+		--card: 0 0% 2%;
+		--card-foreground: 0 0% 100%;
+		--popover: 0 0% 0%;
+		--popover-foreground: 0 0% 100%;
+		--primary: 0 0% 100%;
+		--primary-foreground: 0 0% 0%;
+		--secondary: 0 0% 8%;
+		--secondary-foreground: 0 0% 100%;
+		--muted: 0 0% 8%;
+		--muted-foreground: 0 0% 60%;
+		--accent: 0 0% 12%;
+		--accent-foreground: 0 0% 100%;
+		--destructive: 0 62.8% 30.6%;
+		--destructive-foreground: 0 0% 100%;
+		--border: 0 0% 15%;
+		--input: 0 0% 15%;
+		--ring: 0 0% 100%;
+	}
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+@layer base {
+	* {
+		@apply border-border;
+	}
+	body {
+		@apply bg-background text-foreground font-sans lowercase;
+	}
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+	/* TE-inspired typography */
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6 {
+		@apply font-mono tracking-tight lowercase;
+	}
+
+	/* Subtle transitions */
+	* {
+		@apply transition-colors duration-200;
+	}
+
+	/* TE-style buttons */
+	button {
+		@apply font-mono tracking-wide text-xs lowercase;
+	}
+
+	/* Preserve uppercase for specific text */
+	.uppercase-preserve {
+		text-transform: none !important;
+	}
 }

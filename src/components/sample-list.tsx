@@ -1,0 +1,298 @@
+"use client";
+
+import { useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/lib/supabase";
+import * as Tone from "tone";
+import { DirectoryBrowser } from "./directory-browser";
+
+export type Sample = {
+	id: string;
+	name: string;
+	url: string;
+	storage_path: string;
+	duration: number;
+	createdAt: string;
+	directory: string;
+};
+
+type WaveformData = {
+	peaks: number[];
+	duration: number;
+};
+
+async function fetchSamples() {
+	const { data, error } = await supabase
+		.from("samples")
+		.select("*")
+		.order("created_at", { ascending: false });
+
+	if (error) throw error;
+	return data || [];
+}
+
+export function SampleList() {
+	const queryClient = useQueryClient();
+
+	// Query for samples
+	const { data: samples = [], isLoading } = useQuery({
+		queryKey: ["samples"],
+		queryFn: fetchSamples,
+	});
+
+	// Query for selected sample and waveform
+	const { data: selectedSample } = useQuery<Sample | null>({
+		queryKey: ["selectedSample"],
+		initialData: null,
+	});
+
+	const { data: waveform } = useQuery<WaveformData | null>({
+		queryKey: ["waveform"],
+		initialData: null,
+	});
+
+	// Set up real-time subscription
+	useEffect(() => {
+		const channel = supabase
+			.channel("samples")
+			.on(
+				"postgres_changes",
+				{ event: "*", schema: "public", table: "samples" },
+				() => {
+					queryClient.invalidateQueries({ queryKey: ["samples"] });
+				},
+			)
+			.subscribe();
+
+		return () => {
+			channel.unsubscribe();
+		};
+	}, [queryClient]);
+
+	// Delete mutation
+	const deleteMutation = useMutation({
+		mutationFn: async (sample: Sample) => {
+			// First, delete the file from storage
+			const { error: storageError } = await supabase.storage
+				.from("samples")
+				.remove([sample.storage_path]);
+
+			if (storageError) {
+				throw storageError;
+			}
+
+			// Then delete the database record
+			const { error: dbError } = await supabase
+				.from("samples")
+				.delete()
+				.eq("id", sample.id);
+
+			if (dbError) {
+				throw dbError;
+			}
+
+			// Clear selected sample if it was deleted
+			if (selectedSample?.id === sample.id) {
+				queryClient.setQueryData(["selectedSample"], null);
+				queryClient.setQueryData(["waveform"], null);
+			}
+		},
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["samples"] });
+		},
+	});
+
+	const analyzeSample = async (sample: Sample) => {
+		try {
+			const buffer = await Tone.Buffer.fromUrl(sample.url);
+			const audioBuffer = buffer.get();
+			if (!audioBuffer) return;
+
+			const channelData = audioBuffer.getChannelData(0);
+			const peaks: number[] = [];
+			const blockSize = Math.floor(channelData.length / 100);
+
+			for (let i = 0; i < 100; i++) {
+				const start = blockSize * i;
+				let peak = 0;
+
+				for (let j = 0; j < blockSize; j++) {
+					const value = Math.abs(channelData[start + j]);
+					peak = Math.max(peak, value);
+				}
+
+				peaks.push(peak);
+			}
+
+			queryClient.setQueryData(["waveform"], {
+				peaks,
+				duration: audioBuffer.duration,
+			});
+			queryClient.setQueryData(["selectedSample"], sample);
+		} catch (error) {
+			console.error("Error analyzing sample:", error);
+		}
+	};
+
+	const handleDragStart = (
+		e: React.DragEvent<HTMLDivElement>,
+		sample: Sample,
+	) => {
+		e.dataTransfer.setData("text/plain", JSON.stringify(sample));
+
+		// Create a custom drag preview
+		const dragPreview = document.createElement("div");
+		dragPreview.className =
+			"fixed top-0 left-0 -translate-x-full bg-background border rounded-md px-2 py-1 flex items-center gap-2 pointer-events-none";
+		dragPreview.innerHTML = `
+			<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Audio icon">
+				<title>Audio icon</title>
+				<path d="M12 2v20M2 10h20M2 14h20"/>
+			</svg>
+			<span class="text-xs font-mono">audio</span>
+		`;
+		document.body.appendChild(dragPreview);
+
+		// Set the drag image
+		e.dataTransfer.setDragImage(dragPreview, 20, 20);
+
+		// Remove the preview element after the drag operation
+		requestAnimationFrame(() => {
+			document.body.removeChild(dragPreview);
+		});
+	};
+
+	if (isLoading) {
+		return (
+			<div className="flex items-center justify-center h-full">
+				<svg
+					className="animate-spin h-4 w-4 text-muted-foreground"
+					xmlns="http://www.w3.org/2000/svg"
+					fill="none"
+					viewBox="0 0 24 24"
+					aria-label="Loading samples"
+				>
+					<title>Loading samples</title>
+					<circle
+						className="opacity-25"
+						cx="12"
+						cy="12"
+						r="10"
+						stroke="currentColor"
+						strokeWidth="4"
+					/>
+					<path
+						className="opacity-75"
+						fill="currentColor"
+						d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+					/>
+				</svg>
+			</div>
+		);
+	}
+
+	if (samples.length === 0) {
+		return (
+			<div className="flex flex-col items-center justify-center gap-2 text-center">
+				<svg
+					className="h-4 w-4 text-muted-foreground"
+					xmlns="http://www.w3.org/2000/svg"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					strokeWidth={2}
+					aria-label="No samples uploaded"
+				>
+					<title>No samples uploaded</title>
+					<path
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+					/>
+				</svg>
+				<span className="text-sm text-muted-foreground">
+					drag and drop samples here
+				</span>
+			</div>
+		);
+	}
+
+	return (
+		<div className="grid grid-cols-2 h-full divide-x">
+			<div className="overflow-auto">
+				<DirectoryBrowser
+					samples={samples}
+					onSampleSelect={analyzeSample}
+					selectedSample={selectedSample}
+				/>
+			</div>
+
+			<div className="p-4 overflow-auto">
+				{selectedSample ? (
+					<div className="space-y-4">
+						<div className="space-y-2">
+							<div className="flex items-center justify-between">
+								<h3 className="text-sm font-medium">{selectedSample.name}</h3>
+								<button
+									type="button"
+									className="rounded-full hover:bg-destructive/10 p-2 transition-colors"
+									onClick={() => deleteMutation.mutate(selectedSample)}
+								>
+									<svg
+										className="h-4 w-4 text-destructive"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+										aria-label="Delete sample"
+									>
+										<path
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											strokeWidth={2}
+											d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+										/>
+									</svg>
+								</button>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Directory: {selectedSample.directory}
+							</p>
+							<p className="text-xs text-muted-foreground">
+								Duration: {selectedSample.duration.toFixed(2)}s
+							</p>
+						</div>
+						{waveform && (
+							<div className="h-32 w-full bg-muted/10 rounded-lg p-4">
+								<svg
+									viewBox="0 0 100 100"
+									preserveAspectRatio="none"
+									className="h-full w-full"
+									aria-label="Waveform visualization"
+								>
+									<path
+										d={`M ${waveform.peaks
+											.map(
+												(peak, i) =>
+													`${i} ${50 - peak * 40} L ${i} ${50 + peak * 40}`,
+											)
+											.join(" M ")}`}
+										stroke="currentColor"
+										strokeWidth="0.5"
+										fill="none"
+										className="text-primary"
+									/>
+								</svg>
+							</div>
+						)}
+					</div>
+				) : (
+					<div className="flex items-center justify-center h-full">
+						<p className="text-sm text-muted-foreground">
+							Select a sample to view waveform
+						</p>
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
