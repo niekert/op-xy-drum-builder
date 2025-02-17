@@ -181,7 +181,7 @@ export default function Home() {
 					<div>
 						<div className="text-xs text-muted-foreground flex items-center">
 							<a
-								href="https://github.com/niekert"
+								href="https://github.com/niekert/op-xy-drum-builder"
 								target="_blank"
 								rel="noreferrer"
 								className="inline-flex items-center ml-1 hover:text-foreground"
