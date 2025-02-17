@@ -447,7 +447,9 @@ export function PianoKeys({
 			const url = URL.createObjectURL(content);
 			const a = document.createElement("a");
 			a.href = url;
-			a.download = `${presetName}.zip`;
+			// Ensure we use the current rack name or preset name
+			const downloadName = (currentRack?.name || presetName || "preset").trim();
+			a.download = `${downloadName}.zip`;
 			document.body.appendChild(a);
 			a.click();
 			document.body.removeChild(a);

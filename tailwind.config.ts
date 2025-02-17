@@ -13,6 +13,9 @@ export default {
 				sans: ["var(--font-inter)", "system-ui", "sans-serif"],
 				mono: ["var(--font-space-mono)", "monospace"],
 			},
+			maxWidth: {
+				"1.5xl": "38rem", // Between max-w-xl (36rem) and max-w-2xl (42rem)
+			},
 			colors: {
 				background: "hsl(var(--background))",
 				foreground: "hsl(var(--foreground))",
