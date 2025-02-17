@@ -169,9 +169,15 @@ export function PianoKeys({
 			setError(null);
 
 			try {
-				const sample = JSON.parse(
-					e.dataTransfer.getData("application/json"),
-				) as Sample;
+				const data = JSON.parse(e.dataTransfer.getData("application/json"));
+
+				// Get the sample based on whether it's a direct sample or from a folder
+				const sample = data.type === "folder" ? null : data;
+
+				if (!sample) {
+					setError("Invalid sample data");
+					return;
+				}
 
 				// Mark key as loading
 				setKeys((prev) =>
@@ -205,6 +211,7 @@ export function PianoKeys({
 				// Create new player with the buffer
 				const player = new Tone.Player(buffer).toDestination();
 				playersRef.current[targetNote] = player;
+				buffersRef.current[targetNote] = buffer;
 
 				// Update key state
 				setKeys((prev) =>
@@ -284,6 +291,23 @@ export function PianoKeys({
 							peaks.push(peak);
 						}
 
+						// Calculate RMS (volume) level
+						let rmsSum = 0;
+						for (let i = 0; i < channelData.length; i++) {
+							rmsSum += channelData[i] * channelData[i];
+						}
+						const rmsLevel = Math.sqrt(rmsSum / channelData.length);
+						const rmsDb = 20 * Math.log10(rmsLevel);
+
+						// Update sample with audio details
+						await storage.updateSample(key.sample.id, {
+							duration: audioBuffer.duration,
+							channels: audioBuffer.numberOfChannels,
+							sampleRate: audioBuffer.sampleRate,
+							rmsLevel: rmsDb,
+						});
+
+						// Update the waveform data in the cache
 						queryClient.setQueriesData(
 							{ queryKey: ["waveform"] },
 							{

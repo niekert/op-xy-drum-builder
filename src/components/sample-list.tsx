@@ -29,7 +29,6 @@ export function SampleList({
 	onSampleSelect,
 }: SampleListProps) {
 	const queryClient = useQueryClient();
-	const [waveform, setWaveform] = useState<WaveformData | null>(null);
 	const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
 
 	// Query for directories
@@ -52,6 +51,13 @@ export function SampleList({
 		enabled: directories.length > 0,
 	});
 
+	// Query for waveform data
+	const { data: waveform } = useQuery<WaveformData | null>({
+		queryKey: ["waveform"],
+		queryFn: () => null,
+		enabled: false, // This query is only updated through cache manipulation
+	});
+
 	// Delete mutation
 	const deleteMutation = useMutation({
 		mutationFn: async (sample: Sample) => {
@@ -60,7 +66,6 @@ export function SampleList({
 			// Clear selected sample if it was deleted
 			if (selectedSample?.id === sample.id) {
 				onSampleSelect(null);
-				setWaveform(null);
 			}
 		},
 		onSuccess: () => {
@@ -125,10 +130,6 @@ export function SampleList({
 					channels: audioBuffer.numberOfChannels,
 					sampleRate: audioBuffer.sampleRate,
 					rmsLevel: rmsDb,
-				});
-				setWaveform({
-					peaks,
-					duration: audioBuffer.duration,
 				});
 			});
 		} catch (error) {
@@ -302,7 +303,7 @@ export function SampleList({
 									<path
 										d={`M ${waveform.peaks
 											.map(
-												(peak, i) =>
+												(peak: number, i: number) =>
 													`${i} ${50 - peak * 40} L ${i} ${50 + peak * 40}`,
 											)
 											.join(" M ")}`}
