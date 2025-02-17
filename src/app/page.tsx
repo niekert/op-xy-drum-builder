@@ -181,15 +181,6 @@ export default function Home() {
 					<div>
 						<div className="text-xs text-muted-foreground flex items-center">
 							<a
-								href="https://x.com/niekert94"
-								target="_blank"
-								rel="noreferrer"
-								className="inline-flex items-center gap-1 hover:text-foreground"
-							>
-								made by niek
-							</a>
-
-							<a
 								href="https://github.com/niekert"
 								target="_blank"
 								rel="noreferrer"
