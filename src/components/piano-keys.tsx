@@ -982,10 +982,12 @@ export function PianoKeys({
 				...Array.from({ length: 6 }, (_, i) => [18 + i, ["perc", "other"]]),
 			];
 
-			// Shuffle the assignments array
-			const shuffledAssignments = assignments.sort(() => Math.random() - 0.5);
+			// Shuffle the order of assignments for more randomization
+			const shuffledAssignments = [...assignments].sort(
+				() => Math.random() - 0.5,
+			);
 
-			// Execute assignments
+			// Execute assignments in random order
 			await Promise.all(
 				shuffledAssignments.map(([index, categories]) =>
 					assignSample(index as number, categories as string[]),
