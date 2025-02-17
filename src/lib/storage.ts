@@ -144,10 +144,37 @@ class StorageService {
 		if (!this.db) await this.initDB();
 		if (!this.db) throw new Error("Failed to initialize database");
 		const directories = await this.db.getAll("directories");
-		return directories.map((dir) => ({
-			...dir,
-			hasPermission: this.directoryPermissions.get(dir.id) ?? false,
-		}));
+
+		// Check actual permissions for each directory
+		const directoriesWithPermissions = await Promise.all(
+			directories.map(async (dir) => {
+				try {
+					const handle = dir.handle;
+					const permission = await handle.queryPermission({ mode: "read" });
+					const hasPermission = permission === "granted";
+
+					// Update our cache
+					this.directoryHandles.set(dir.id, handle);
+					this.directoryPermissions.set(dir.id, hasPermission);
+
+					return {
+						...dir,
+						hasPermission,
+					};
+				} catch (error) {
+					console.warn(
+						`Failed to check permissions for directory ${dir.name}:`,
+						error,
+					);
+					return {
+						...dir,
+						hasPermission: false,
+					};
+				}
+			}),
+		);
+
+		return directoriesWithPermissions;
 	}
 
 	async requestDirectoryPermission(directoryId: string): Promise<boolean> {

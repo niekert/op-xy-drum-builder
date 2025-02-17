@@ -78,6 +78,7 @@ export function Dropzone() {
 			setStatus({ total: audioFiles.length, completed: 0 });
 
 			// Process each file
+			const errors: string[] = [];
 			for (const entry of audioFiles) {
 				try {
 					if (entry.handle.kind !== "file") continue;
@@ -89,23 +90,43 @@ export function Dropzone() {
 						directoryId: directory.id,
 					});
 
+					// Invalidate queries after each successful file process
+					await Promise.all([
+						queryClient.invalidateQueries({ queryKey: ["samples"] }),
+						queryClient.invalidateQueries({ queryKey: ["directories"] }),
+					]);
+
 					setStatus((prev) =>
 						prev ? { ...prev, completed: prev.completed + 1 } : null,
 					);
 				} catch (error) {
 					console.error("Error processing file:", entry.name, error);
+					errors.push(
+						`${entry.name}: ${error instanceof Error ? error.message : "Unknown error"}`,
+					);
 				}
 			}
 
-			// Refresh sample list and directories
-			queryClient.invalidateQueries({ queryKey: ["samples"] });
-			queryClient.invalidateQueries({ queryKey: ["directories"] });
+			// Final query invalidation to ensure everything is up to date
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ["samples"] }),
+				queryClient.invalidateQueries({ queryKey: ["directories"] }),
+			]);
+
+			if (errors.length > 0) {
+				setError(`Failed to process some files: ${errors.length} errors`);
+			}
 		} catch (error) {
 			console.error("Error processing directory:", error);
 			setError("Failed to process directory");
 		} finally {
 			setIsProcessing(false);
 			setStatus(null);
+			// One final invalidation in case of any errors
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ["samples"] }),
+				queryClient.invalidateQueries({ queryKey: ["directories"] }),
+			]);
 		}
 	};
 
