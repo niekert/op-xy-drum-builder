@@ -20,6 +20,8 @@ export function Dropzone() {
 	const [status, setStatus] = useState<ProcessStatus | null>(null);
 	const [isProcessing, setIsProcessing] = useState(false);
 
+	const [audioContext] = useState(() => new AudioContext());
+
 	const processMutation = useMutation({
 		mutationFn: async (file: {
 			file: File;
@@ -27,10 +29,11 @@ export function Dropzone() {
 			directoryId: string;
 		}) => {
 			try {
-				// Analyze the audio file
-				const audioContext = new AudioContext();
 				const arrayBuffer = await file.file.arrayBuffer();
+
 				const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+				// Create Tone.js buffer from the decoded audio data
 
 				// Add sample to IndexedDB
 				await storage.upsertSample(file.file, file.path, file.directoryId, {

@@ -333,7 +333,7 @@ class StorageService {
 	async getFile(filePath: string, directoryHandleId: string): Promise<File> {
 		const dirHandle = this.directoryHandles.get(directoryHandleId);
 		if (!dirHandle) {
-			throw new Error("Directory handle not found");
+			throw new Error("Directory handle not found", directoryHandleId);
 		}
 
 		const pathParts = filePath.split("/").filter(Boolean);
