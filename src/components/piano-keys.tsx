@@ -110,17 +110,24 @@ const DEFAULT_PATCH = {
 
 type DragItem = {
 	type: "folder" | "sample";
-	data: any;
+	data: Sample | { path: string; samples: Sample[] };
 } | null;
 
 type PianoKeysProps = {
 	dragItem: DragItem;
+	selectedSample: Sample | null;
+	onSampleSelect: (sample: Sample | null) => void;
 };
 
-export function PianoKeys({ dragItem }: PianoKeysProps) {
+export function PianoKeys({
+	dragItem,
+	selectedSample,
+	onSampleSelect,
+}: PianoKeysProps) {
 	const queryClient = useQueryClient();
 	const [keys, setKeys] = useState<Key[]>(INITIAL_KEYS);
 	const [activeKey, setActiveKey] = useState<string | null>(null);
+	const [hoverKey, setHoverKey] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [isLoadOpen, setIsLoadOpen] = useState(false);
 	const [isSaveOpen, setIsSaveOpen] = useState(false);
@@ -283,8 +290,8 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 					// Stop and restart the player immediately
 					player.stop().start();
 
-					// Update the selected sample in the cache
-					queryClient.setQueryData(["selectedSample"], key.sample);
+					// Update the selected sample
+					onSampleSelect(key.sample);
 
 					// Analyze the sample for waveform
 					const audioBuffer = buffer.get();
@@ -305,10 +312,13 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 							peaks.push(peak);
 						}
 
-						queryClient.setQueryData(["waveform"], {
-							peaks,
-							duration: audioBuffer.duration,
-						});
+						queryClient.setQueriesData(
+							{ queryKey: ["waveform"] },
+							{
+								peaks,
+								duration: audioBuffer.duration,
+							},
+						);
 					}
 				} catch (error) {
 					console.error("Error playing sample:", error);
@@ -318,7 +328,7 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 			// Reset active key after 100ms
 			setTimeout(() => setActiveKey(null), 100);
 		},
-		[keys, queryClient],
+		[keys, onSampleSelect, queryClient],
 	);
 
 	const categorizeSample = useCallback((filename: string): string => {
@@ -342,13 +352,15 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 		return "other";
 	}, []);
 
-	const handleDragOver = useCallback((e: React.DragEvent) => {
+	const handleDragOver = useCallback((e: React.DragEvent, note: string) => {
 		e.preventDefault();
 		e.dataTransfer.dropEffect = "copy";
+		setHoverKey(note);
 	}, []);
 
 	const handleDragLeave = useCallback((e: React.DragEvent) => {
 		e.preventDefault();
+		setHoverKey(null);
 	}, []);
 
 	const handleDownloadClick = () => {
@@ -419,6 +431,8 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 
 		// Get all mapped samples
 		const mappedKeys = keys.filter((key) => key.sample);
+
+		console.log("mapped", mappedKeys);
 
 		// Create regions array for patch.json
 		const regions = await Promise.all(
@@ -685,26 +699,35 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 
 	// Helper function to convert note name to MIDI note number
 	function getMidiNoteNumber(note: string): number {
+		// Create a fixed mapping for our 24 keys starting from F2 (53)
 		const noteMap: Record<string, number> = {
-			C: 0,
-			"C#": 1,
-			D: 2,
-			"D#": 3,
-			E: 4,
-			F: 5,
-			"F#": 6,
-			G: 7,
-			"G#": 8,
-			A: 9,
-			"A#": 10,
-			B: 11,
+			F2: 53,
+			"F#2": 54,
+			G2: 55,
+			"G#2": 56,
+			A3: 57,
+			"A#3": 58,
+			B3: 59,
+			C3: 60,
+			"C#3": 61,
+			D3: 62,
+			"D#3": 63,
+			E3: 64,
+			F3: 65,
+			"F#3": 66,
+			G3: 67,
+			"G#3": 68,
+			A4: 69,
+			"A#4": 70,
+			B4: 71,
+			C4: 72,
+			"C#4": 73,
+			D4: 74,
+			"D#4": 75,
+			E4: 76,
 		};
 
-		const noteName = note.slice(0, -1); // Remove octave number
-		const octave = Number.parseInt(note.slice(-1), 10); // Get octave number
-
-		// Adjust octave to match OP-XY mapping
-		return noteMap[noteName] + (octave + 2) * 12;
+		return noteMap[note] || 60; // Default to middle C if note not found
 	}
 
 	// Helper function to convert AudioBuffer to WAV format
@@ -1176,7 +1199,10 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 						? "ring-2 ring-primary ring-offset-2 bg-primary/5"
 						: ""
 				}`}
-				onDragOver={handleDragOver}
+				onDragOver={(e) => {
+					e.preventDefault();
+					e.dataTransfer.dropEffect = "copy";
+				}}
 				onDragLeave={handleDragLeave}
 				onDrop={dragItem?.type === "folder" ? handleFolderDrop : undefined}
 			>
@@ -1225,9 +1251,11 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 										bg-background text-foreground border border-border
 										${key.sample ? "bg-primary/10" : ""}
 										${key.isLoading ? "animate-pulse" : ""}
+										${hoverKey === key.note ? "bg-primary/20 ring-2 ring-primary ring-offset-2" : ""}
 										hover:bg-primary/20 cursor-pointer
 									`}
-										onDragOver={handleDragOver}
+										onDragOver={(e) => handleDragOver(e, key.note)}
+										onDragLeave={handleDragLeave}
 										onDrop={(e) => handleDrop(e, key.note)}
 									>
 										<div className="text-center space-y-1">
@@ -1291,9 +1319,11 @@ export function PianoKeys({ dragItem }: PianoKeysProps) {
 												bg-foreground text-background
 												${key.sample ? "bg-primary/10" : ""}
 												${key.isLoading ? "animate-pulse" : ""}
+												${hoverKey === key.note ? "bg-primary/20 ring-2 ring-primary ring-offset-2" : ""}
 												hover:bg-primary/20 cursor-pointer
 											`}
-											onDragOver={handleDragOver}
+											onDragOver={(e) => handleDragOver(e, key.note)}
+											onDragLeave={handleDragLeave}
 											onDrop={(e) => handleDrop(e, key.note)}
 										>
 											<div className="text-center space-y-1">

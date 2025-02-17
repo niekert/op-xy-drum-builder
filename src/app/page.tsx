@@ -13,6 +13,7 @@ type DragItem = {
 
 export default function Home() {
 	const [dragItem, setDragItem] = useState<DragItem>(null);
+	const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
 
 	return (
 		<div className="min-h-screen bg-background">
@@ -54,11 +55,14 @@ export default function Home() {
 							</li>
 							<li className="flex gap-2">
 								<span className="font-mono text-foreground">03.</span>
-								<span>optionally save your configuration</span>
+								<span>
+									you can also drag an entire folder to automatically create a
+									drum rack
+								</span>
 							</li>
 							<li className="flex gap-2">
 								<span className="font-mono text-foreground">04.</span>
-								<span>press download to get your zip file</span>
+								<span>press download to get get a zip file</span>
 							</li>
 							<li className="flex gap-2">
 								<span className="font-mono text-foreground">05.</span>
@@ -78,6 +82,13 @@ export default function Home() {
 									</a>{" "}
 									and connect your{" "}
 									<span className="uppercase-preserve">OP-XY</span> via usb-c
+								</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">07.</span>
+								<span>
+									on <span className="uppercase-preserve">OP-XY</span> press
+									"COM" and click M4 to enable MTP
 								</span>
 							</li>
 							<li className="flex gap-2">
@@ -110,6 +121,8 @@ export default function Home() {
 							<SampleList
 								onDragStart={(type, data) => setDragItem({ type, data })}
 								onDragEnd={() => setDragItem(null)}
+								selectedSample={selectedSample}
+								onSampleSelect={setSelectedSample}
 							/>
 						</div>
 					</div>
@@ -120,7 +133,11 @@ export default function Home() {
 							mapping
 						</span>
 						<div className="border rounded-lg p-4">
-							<PianoKeys dragItem={dragItem} />
+							<PianoKeys
+								dragItem={dragItem}
+								selectedSample={selectedSample}
+								onSampleSelect={setSelectedSample}
+							/>
 						</div>
 					</div>
 				</div>

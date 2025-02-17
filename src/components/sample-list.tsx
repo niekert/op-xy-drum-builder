@@ -41,11 +41,17 @@ type SampleListProps = {
 		data: Sample | { path: string; samples: Sample[] },
 	) => void;
 	onDragEnd: () => void;
+	selectedSample: Sample | null;
+	onSampleSelect: (sample: Sample | null) => void;
 };
 
-export function SampleList({ onDragStart, onDragEnd }: SampleListProps) {
+export function SampleList({
+	onDragStart,
+	onDragEnd,
+	selectedSample,
+	onSampleSelect,
+}: SampleListProps) {
 	const queryClient = useQueryClient();
-	const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
 	const [waveform, setWaveform] = useState<WaveformData | null>(null);
 
 	// Query for samples
@@ -78,7 +84,7 @@ export function SampleList({ onDragStart, onDragEnd }: SampleListProps) {
 
 			// Clear selected sample if it was deleted
 			if (selectedSample?.id === sample.id) {
-				setSelectedSample(null);
+				onSampleSelect(null);
 				setWaveform(null);
 			}
 		},
@@ -91,7 +97,7 @@ export function SampleList({ onDragStart, onDragEnd }: SampleListProps) {
 		try {
 			// Start transition for UI updates
 			startTransition(() => {
-				setSelectedSample(sample);
+				onSampleSelect(sample);
 			});
 
 			// Ensure the URL is properly decoded for playback
@@ -142,7 +148,7 @@ export function SampleList({ onDragStart, onDragEnd }: SampleListProps) {
 
 			// Update the UI with the new details
 			startTransition(() => {
-				setSelectedSample({
+				onSampleSelect({
 					...sample,
 					duration: audioBuffer.duration,
 					channels: audioBuffer.numberOfChannels,

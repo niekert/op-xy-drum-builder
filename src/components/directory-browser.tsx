@@ -12,18 +12,17 @@ import { ChevronRight, ChevronDown, Folder, Music } from "lucide-react";
 import * as Tone from "tone";
 import type { Sample } from "./sample-list";
 import { useQueryClient } from "@tanstack/react-query";
-
-type TreeNode = {
-	name: string;
-	path: string;
-	type: "directory" | "sample";
-	children: TreeNode[];
-	sample?: Sample;
-};
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { supabase } from "@/lib/supabase";
 
 type DirectoryBrowserProps = {
 	samples: Sample[];
-	onSampleSelect: (sample: Sample) => void;
+	onSampleSelect: (sample: Sample | null) => void;
 	selectedSample: Sample | null;
 	onDragStart: (
 		type: "folder" | "sample",
@@ -32,6 +31,23 @@ type DirectoryBrowserProps = {
 	onDragEnd: () => void;
 };
 
+type FolderNode = {
+	type: "folder";
+	name: string;
+	path: string;
+	children: Node[];
+	samples: Sample[];
+};
+
+type SampleNode = {
+	type: "sample";
+	name: string;
+	path: string;
+	sample: Sample;
+};
+
+type Node = FolderNode | SampleNode;
+
 export function DirectoryBrowser({
 	samples,
 	onSampleSelect,
@@ -39,9 +55,12 @@ export function DirectoryBrowser({
 	onDragStart,
 	onDragEnd,
 }: DirectoryBrowserProps) {
-	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
+		new Set(),
+	);
+	const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
 	const playerRef = useRef<Tone.Player | null>(null);
-	const nodesRef = useRef<Map<string, TreeNode>>(new Map());
+	const nodesRef = useRef<Map<string, Node>>(new Map());
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [selectedPath, setSelectedPath] = useState<string>("/");
 	const queryClient = useQueryClient();
@@ -91,35 +110,42 @@ export function DirectoryBrowser({
 	// Build tree structure from flat samples array
 	const tree = useMemo(() => {
 		nodesRef.current.clear();
-		const root: TreeNode = {
+		const root: FolderNode = {
+			type: "folder",
 			name: "",
 			path: "/",
-			type: "directory",
 			children: [],
+			samples: [],
 		};
 		nodesRef.current.set("/", root);
 
-		// Helper function to ensure a directory path exists
-		const ensurePath = (path: string) => {
-			if (path === "/" || !path) return root;
+		// Create a function to ensure a path exists and return its node
+		const ensurePath = (path: string): FolderNode => {
+			if (path === "/" || path === "") return root;
 
 			const parts = path.split("/").filter(Boolean);
 			let current = root;
 
 			for (const part of parts) {
-				let child = current.children.find((c) => c.name === part);
+				let child = current.children.find(
+					(c): c is FolderNode => c.type === "folder" && c.name === part,
+				);
+
 				if (!child) {
 					child = {
+						type: "folder",
 						name: part,
 						path: current.path === "/" ? part : `${current.path}/${part}`,
-						type: "directory",
 						children: [],
+						samples: [],
 					};
 					current.children.push(child);
 					nodesRef.current.set(child.path, child);
 				}
+
 				current = child;
 			}
+
 			return current;
 		};
 
@@ -127,37 +153,41 @@ export function DirectoryBrowser({
 		for (const sample of samples) {
 			const directory = sample.directory === "/" ? "" : sample.directory;
 			const parent = ensurePath(directory);
-			const node: TreeNode = {
+			const node: SampleNode = {
+				type: "sample",
 				name: sample.name,
 				path: `${parent.path === "/" ? "" : parent.path}/${sample.name}`,
-				type: "sample" as const,
-				children: [],
-				sample,
+				sample: sample,
 			};
+			parent.samples.push(sample);
 			parent.children.push(node);
 			nodesRef.current.set(node.path, node);
 		}
 
 		// Sort function: directories first, then alphabetically
-		const sortNodes = (a: TreeNode, b: TreeNode) => {
+		const sortNodes = (a: Node, b: Node) => {
 			if (a.type !== b.type) {
-				return a.type === "directory" ? -1 : 1;
+				return a.type === "folder" ? -1 : 1;
 			}
 			return a.name.localeCompare(b.name);
 		};
 
 		// Sort all levels of the tree
-		const sortTree = (node: TreeNode) => {
+		const sortTree = (node: FolderNode) => {
 			node.children.sort(sortNodes);
-			node.children.forEach(sortTree);
+			for (const child of node.children) {
+				if (child.type === "folder") {
+					sortTree(child);
+				}
+			}
 		};
 
 		sortTree(root);
 		return root;
 	}, [samples]);
 
-	const toggleExpand = useCallback((path: string) => {
-		setExpandedPaths((prev) => {
+	const toggleFolder = useCallback((path: string) => {
+		setExpandedFolders((prev) => {
 			const next = new Set(prev);
 			if (next.has(path)) {
 				next.delete(path);
@@ -169,27 +199,31 @@ export function DirectoryBrowser({
 	}, []);
 
 	const getVisibleNodes = useCallback(() => {
-		const visibleNodes: TreeNode[] = [];
+		const visibleNodes: Node[] = [];
 
-		const addVisibleNodes = (node: TreeNode) => {
-			if (node.path === "/") {
+		const addVisibleNodes = (node: Node) => {
+			if (node.path === "/" && node.type === "folder") {
 				// For root, only process children
-				node.children.forEach(addVisibleNodes);
+				for (const child of node.children) {
+					addVisibleNodes(child);
+				}
 				return;
 			}
 
 			visibleNodes.push(node);
 
 			// Add children if it's an expanded directory
-			if (node.type === "directory" && expandedPaths.has(node.path)) {
-				node.children.forEach(addVisibleNodes);
+			if (node.type === "folder" && expandedFolders.has(node.path)) {
+				for (const child of node.children) {
+					addVisibleNodes(child);
+				}
 			}
 		};
 
 		// Start from root
 		addVisibleNodes(tree);
 		return visibleNodes;
-	}, [expandedPaths, tree]);
+	}, [expandedFolders, tree]);
 
 	// Add global keyboard handler
 	useEffect(() => {
@@ -198,7 +232,7 @@ export function DirectoryBrowser({
 			const currentNode = Array.from(nodesRef.current.values()).find(
 				(n) =>
 					(n.type === "sample" && n.sample?.id === selectedSample?.id) ||
-					(n.type === "directory" && n.path === selectedPath),
+					(n.type === "folder" && n.path === selectedPath),
 			);
 
 			if (!currentNode) return;
@@ -244,9 +278,9 @@ export function DirectoryBrowser({
 				}
 				case "ArrowRight": {
 					e.preventDefault();
-					if (currentNode.type === "directory") {
-						if (!expandedPaths.has(currentNode.path)) {
-							toggleExpand(currentNode.path);
+					if (currentNode.type === "folder") {
+						if (!expandedFolders.has(currentNode.path)) {
+							toggleFolder(currentNode.path);
 							// Select first child if available
 							const firstChild = currentNode.children[0];
 							if (firstChild) {
@@ -264,19 +298,19 @@ export function DirectoryBrowser({
 							.join("/");
 						const parent = nodesRef.current.get(parentPath);
 						if (
-							parent?.type === "directory" &&
-							!expandedPaths.has(parent.path)
+							parent?.type === "folder" &&
+							!expandedFolders.has(parent.path)
 						) {
-							toggleExpand(parent.path);
+							toggleFolder(parent.path);
 						}
 					}
 					break;
 				}
 				case "ArrowLeft": {
 					e.preventDefault();
-					if (currentNode.type === "directory") {
-						if (expandedPaths.has(currentNode.path)) {
-							toggleExpand(currentNode.path);
+					if (currentNode.type === "folder") {
+						if (expandedFolders.has(currentNode.path)) {
+							toggleFolder(currentNode.path);
 						} else {
 							// Go to parent directory
 							const parentPath = currentNode.path
@@ -284,7 +318,7 @@ export function DirectoryBrowser({
 								.slice(0, -1)
 								.join("/");
 							const parent = nodesRef.current.get(parentPath);
-							if (parent?.type === "directory" && parent.path !== "/") {
+							if (parent?.type === "folder" && parent.path !== "/") {
 								setSelectedPath(parent.path);
 							}
 						}
@@ -295,7 +329,7 @@ export function DirectoryBrowser({
 							.slice(0, -1)
 							.join("/");
 						const parent = nodesRef.current.get(parentPath);
-						if (parent?.type === "directory" && parent.path !== "/") {
+						if (parent?.type === "folder" && parent.path !== "/") {
 							setSelectedPath(parent.path);
 						}
 					}
@@ -304,8 +338,8 @@ export function DirectoryBrowser({
 				case "Enter":
 				case " ": {
 					e.preventDefault();
-					if (currentNode.type === "directory") {
-						toggleExpand(currentNode.path);
+					if (currentNode.type === "folder") {
+						toggleFolder(currentNode.path);
 					} else if (currentNode.sample) {
 						onSampleSelect(currentNode.sample);
 					}
@@ -322,10 +356,10 @@ export function DirectoryBrowser({
 	}, [
 		selectedSample,
 		selectedPath,
-		expandedPaths,
+		expandedFolders,
 		onSampleSelect,
 		getVisibleNodes,
-		toggleExpand,
+		toggleFolder,
 		queryClient,
 	]);
 
@@ -349,7 +383,7 @@ export function DirectoryBrowser({
 		setTimeout(() => document.body.removeChild(dragPreview), 0);
 	};
 
-	const handleFolderDragStart = (e: React.DragEvent, node: TreeNode) => {
+	const handleFolderDragStart = (e: React.DragEvent, node: Node) => {
 		e.stopPropagation();
 		const folderData = {
 			path: node.path,
@@ -379,15 +413,87 @@ export function DirectoryBrowser({
 		setTimeout(() => document.body.removeChild(dragPreview), 0);
 	};
 
-	const renderNode = (node: TreeNode) => {
-		const isExpanded = expandedPaths.has(node.path);
+	const handleDeleteSample = async (sample: Sample) => {
+		try {
+			setDeletingItems((prev) => new Set(prev).add(sample.id));
+
+			// First, delete the file from storage
+			const { error: storageError } = await supabase.storage
+				.from("samples")
+				.remove([sample.storage_path]);
+
+			if (storageError) throw storageError;
+
+			// Then delete the database record
+			const { error: dbError } = await supabase
+				.from("samples")
+				.delete()
+				.eq("id", sample.id);
+
+			if (dbError) throw dbError;
+
+			// Clear selected sample if it was deleted
+			if (selectedSample?.id === sample.id) {
+				onSampleSelect(null);
+			}
+
+			// Invalidate samples query to refresh the list
+			queryClient.invalidateQueries({ queryKey: ["samples"] });
+		} catch (error) {
+			console.error("Error deleting sample:", error);
+		} finally {
+			setDeletingItems((prev) => {
+				const next = new Set(prev);
+				next.delete(sample.id);
+				return next;
+			});
+		}
+	};
+
+	const handleDeleteFolder = async (path: string, samples: Sample[]) => {
+		try {
+			setDeletingItems((prev) => new Set(prev).add(path));
+
+			// Get all samples in this folder
+			const folderSamples = samples.filter((sample) =>
+				sample.directory.startsWith(path),
+			);
+
+			// Delete all samples in the folder
+			for (const sample of folderSamples) {
+				await handleDeleteSample(sample);
+			}
+
+			// Remove folder from expanded state
+			setExpandedFolders((prev) => {
+				const next = new Set(prev);
+				next.delete(path);
+				return next;
+			});
+		} catch (error) {
+			console.error("Error deleting folder:", error);
+		} finally {
+			setDeletingItems((prev) => {
+				const next = new Set(prev);
+				next.delete(path);
+				return next;
+			});
+		}
+	};
+
+	const renderNode = (node: Node) => {
+		const isExpanded = expandedFolders.has(node.path);
 		const isSelected =
 			node.type === "sample"
 				? node.sample?.id === selectedSample?.id
 				: node.path === selectedPath;
 		const showHighlight = node.type === "sample" && isSelected;
 
-		if (node.path === "/" && node.children.length > 0) {
+		if (
+			node.path === "/" &&
+			node.type === "folder" &&
+			node.children.length > 0
+		) {
 			return (
 				<div className="space-y-1">
 					{node.children.map((child) => renderNode(child))}
@@ -397,122 +503,177 @@ export function DirectoryBrowser({
 
 		const level = node.path.split("/").length - 1;
 
-		console.log("node", node);
-
 		if (node.type === "sample") {
 			return (
-				<div
-					draggable
-					onDragStart={(e) =>
-						node.sample && handleSampleDragStart(e, node.sample)
-					}
-					onDragEnd={onDragEnd}
-					key={node.path}
-					style={{ marginLeft: `${level * 16}px` }}
-					className={`
-						flex items-center gap-2 p-1 rounded-md outline-none
-						${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
-						${isSelected && !showHighlight ? "bg-muted/30" : ""}
-					`}
-					onClick={(e) => {
-						if (node.type === "directory") {
-							e.stopPropagation();
-							setSelectedPath(node.path);
-							// Clear sample selection when selecting a directory
-							queryClient.setQueryData(["selectedSample"], null);
-							toggleExpand(node.path);
-						} else if (node.sample) {
-							onSampleSelect(node.sample);
-							setSelectedPath("");
-						}
-					}}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault();
-							if (node.type === "directory") {
-								setSelectedPath(node.path);
-								toggleExpand(node.path);
-							} else if (node.sample) {
+				<ContextMenu key={node.sample.id}>
+					<ContextMenuTrigger>
+						<div
+							draggable
+							onDragStart={(e) => handleSampleDragStart(e, node.sample)}
+							onDragEnd={onDragEnd}
+							key={node.path}
+							style={{ marginLeft: `${level * 16}px` }}
+							className={`
+								flex items-center gap-2 p-1 rounded-md outline-none
+								${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
+								${isSelected && !showHighlight ? "bg-muted/30" : ""}
+							`}
+							onClick={() => {
 								onSampleSelect(node.sample);
-							}
-						}
-					}}
-					role="treeitem"
-					tabIndex={isSelected ? 0 : -1}
-					aria-selected={isSelected}
-				>
-					<div className="w-4 flex-shrink-0" /> {/* Spacing for alignment */}
-					<Music className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-					<span className="text-sm truncate">{node.name}</span>
-				</div>
+								setSelectedPath("");
+							}}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									e.preventDefault();
+									onSampleSelect(node.sample);
+								}
+							}}
+							role="treeitem"
+							tabIndex={isSelected ? 0 : -1}
+							aria-selected={isSelected}
+						>
+							<div className="w-4 flex-shrink-0" />
+							<Music className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+							<span className="text-sm truncate">{node.name}</span>
+						</div>
+					</ContextMenuTrigger>
+					<ContextMenuContent>
+						<ContextMenuItem
+							className="text-destructive focus:text-destructive"
+							onSelect={() => handleDeleteSample(node.sample)}
+							disabled={deletingItems.has(node.sample.id)}
+						>
+							{deletingItems.has(node.sample.id) ? (
+								<>
+									<span className="mr-2">Deleting...</span>
+									<svg
+										className="animate-spin h-4 w-4"
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										aria-label="Loading..."
+									>
+										<title>Loading...</title>
+										<circle
+											className="opacity-25"
+											cx="12"
+											cy="12"
+											r="10"
+											stroke="currentColor"
+											strokeWidth="4"
+										/>
+										<path
+											className="opacity-75"
+											fill="currentColor"
+											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+										/>
+									</svg>
+								</>
+							) : (
+								"Delete Sample"
+							)}
+						</ContextMenuItem>
+					</ContextMenuContent>
+				</ContextMenu>
 			);
 		}
 
+		// At this point, node must be a folder
 		return (
 			<Fragment key={node.path}>
-				<div
-					draggable
-					onDragStart={(e) => handleFolderDragStart(e, node)}
-					onDragEnd={onDragEnd}
-					key={node.path}
-					style={{ marginLeft: `${level * 16}px` }}
-					className={`
-					flex flex-col gap-1
-					${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
-					${isSelected && !showHighlight ? "bg-muted/30" : ""}
-				`}
-				>
-					<div
-						className="flex items-center gap-2 p-1 rounded-md outline-none"
-						onClick={(e) => {
-							if (node.type === "directory") {
-								e.stopPropagation();
-								setSelectedPath(node.path);
-								// Clear sample selection when selecting a directory
-								queryClient.setQueryData(["selectedSample"], null);
-								toggleExpand(node.path);
-							} else if (node.sample) {
-								onSampleSelect(node.sample);
-								setSelectedPath("");
-							}
-						}}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" || e.key === " ") {
-								e.preventDefault();
-								if (node.type === "directory") {
-									setSelectedPath(node.path);
-									toggleExpand(node.path);
-								} else if (node.sample) {
-									onSampleSelect(node.sample);
-								}
-							}
-						}}
-						role="treeitem"
-						tabIndex={isSelected ? 0 : -1}
-						aria-selected={isSelected}
-						aria-expanded={node.type === "directory" ? isExpanded : undefined}
-					>
-						<button
-							type="button"
-							onClick={(e) => {
-								e.stopPropagation();
-								toggleExpand(node.path);
-							}}
-							className="p-0.5 hover:bg-muted rounded"
-							aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
+				<ContextMenu>
+					<ContextMenuTrigger>
+						<div
+							draggable
+							onDragStart={(e) => handleFolderDragStart(e, node)}
+							onDragEnd={onDragEnd}
+							key={node.path}
+							style={{ marginLeft: `${level * 16}px` }}
+							className={`
+							flex flex-col gap-1
+							${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
+							${isSelected && !showHighlight ? "bg-muted/30" : ""}
+						`}
 						>
-							{isExpanded ? (
-								<ChevronDown className="h-4 w-4 text-muted-foreground" />
-							) : (
-								<ChevronRight className="h-4 w-4 text-muted-foreground" />
-							)}
-						</button>
-						<div className="flex items-center gap-2 cursor-grab active:cursor-grabbing">
-							<Folder className="h-4 w-4 text-muted-foreground" />
-							<span className="text-sm">{node.name}</span>
+							<div
+								className="flex items-center gap-2 p-1 rounded-md outline-none"
+								onClick={() => {
+									setSelectedPath(node.path);
+									queryClient.setQueryData(["selectedSample"], null);
+									toggleFolder(node.path);
+								}}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										e.preventDefault();
+										setSelectedPath(node.path);
+										toggleFolder(node.path);
+									}
+								}}
+								role="treeitem"
+								tabIndex={isSelected ? 0 : -1}
+								aria-selected={isSelected}
+								aria-expanded={isExpanded}
+							>
+								<button
+									type="button"
+									onClick={(e) => {
+										e.stopPropagation();
+										toggleFolder(node.path);
+									}}
+									className="p-0.5 hover:bg-muted rounded"
+									aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
+								>
+									{isExpanded ? (
+										<ChevronDown className="h-4 w-4 text-muted-foreground" />
+									) : (
+										<ChevronRight className="h-4 w-4 text-muted-foreground" />
+									)}
+								</button>
+								<div className="flex items-center gap-2 cursor-grab active:cursor-grabbing">
+									<Folder className="h-4 w-4 text-muted-foreground" />
+									<span className="text-sm">{node.name}</span>
+								</div>
+							</div>
 						</div>
-					</div>
-				</div>
+					</ContextMenuTrigger>
+					<ContextMenuContent>
+						<ContextMenuItem
+							className="text-destructive focus:text-destructive"
+							onSelect={() => handleDeleteFolder(node.path, samples)}
+							disabled={deletingItems.has(node.path)}
+						>
+							{deletingItems.has(node.path) ? (
+								<>
+									<span className="mr-2">Deleting...</span>
+									<svg
+										className="animate-spin h-4 w-4"
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										aria-label="Loading..."
+									>
+										<title>Loading...</title>
+										<circle
+											className="opacity-25"
+											cx="12"
+											cy="12"
+											r="10"
+											stroke="currentColor"
+											strokeWidth="4"
+										/>
+										<path
+											className="opacity-75"
+											fill="currentColor"
+											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+										/>
+									</svg>
+								</>
+							) : (
+								"Delete Folder"
+							)}
+						</ContextMenuItem>
+					</ContextMenuContent>
+				</ContextMenu>
 				{isExpanded && (
 					<div className="space-y-1">
 						{node.children.map((child) => renderNode(child))}
@@ -522,14 +683,15 @@ export function DirectoryBrowser({
 		);
 	};
 
-	const getAllSamplesInFolder = (node: TreeNode): Sample[] => {
+	const getAllSamplesInFolder = (node: Node): Sample[] => {
 		const samples: Sample[] = [];
 
-		const traverse = (node: TreeNode) => {
-			if (node.type === "sample" && node.sample) {
+		const traverse = (node: Node) => {
+			if (node.type === "sample") {
 				samples.push(node.sample);
+			} else {
+				node.children.forEach(traverse);
 			}
-			node.children.forEach(traverse);
 		};
 
 		traverse(node);
