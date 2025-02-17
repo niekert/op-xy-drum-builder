@@ -116,6 +116,8 @@ class StorageService {
 	}
 
 	private async initDB(): Promise<void> {
+		if (typeof indexedDB === "undefined") return;
+
 		this.db = await openDB<SampleDB>("samples-db", 1, {
 			upgrade(db: IDBPDatabase<SampleDB>) {
 				// Directories store

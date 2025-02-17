@@ -13,15 +13,14 @@ type WaveformData = {
 };
 
 type SampleListProps = {
-	onDragStart: (e: React.DragEvent<HTMLDivElement>, sample: Sample) => void;
+	onDragStart: (
+		type: "folder" | "sample",
+		data: Sample | { path: string; samples: Sample[] },
+	) => void;
 	onDragEnd: () => void;
 	selectedSample: Sample | null;
 	onSampleSelect: (sample: Sample | null) => void;
 };
-
-async function fetchSamples(directoryId: string) {
-	return storage.getSamples(directoryId);
-}
 
 export function SampleList({
 	onDragStart,

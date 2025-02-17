@@ -4,7 +4,7 @@ import { Dropzone } from "@/components/dropzone";
 import { SampleList } from "@/components/sample-list";
 import { PianoKeys } from "@/components/piano-keys";
 import { useState } from "react";
-import type { Sample } from "@/components/sample-list";
+import type { Sample } from "@/lib/storage";
 
 type DragItem = {
 	type: "folder" | "sample";
@@ -121,7 +121,9 @@ export default function Home() {
 						</span>
 						<div className="h-[400px] border rounded-lg bg-card">
 							<SampleList
-								onDragStart={(type, data) => setDragItem({ type, data })}
+								onDragStart={(type, data) =>
+									setDragItem({ type: type as any, data })
+								}
 								onDragEnd={() => setDragItem(null)}
 								selectedSample={selectedSample}
 								onSampleSelect={setSelectedSample}

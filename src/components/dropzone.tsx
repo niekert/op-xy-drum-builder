@@ -20,7 +20,9 @@ export function Dropzone() {
 	const [status, setStatus] = useState<ProcessStatus | null>(null);
 	const [isProcessing, setIsProcessing] = useState(false);
 
-	const [audioContext] = useState(() => new AudioContext());
+	const [audioContext] = useState(() =>
+		typeof AudioContext !== "undefined" ? new AudioContext() : null,
+	);
 
 	const processMutation = useMutation({
 		mutationFn: async (file: {
@@ -29,6 +31,10 @@ export function Dropzone() {
 			directoryId: string;
 		}) => {
 			try {
+				if (!audioContext) {
+					throw new Error("AudioContext is not supported");
+				}
+
 				const arrayBuffer = await file.file.arrayBuffer();
 
 				const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
@@ -74,6 +80,8 @@ export function Dropzone() {
 			// Process each file
 			for (const entry of audioFiles) {
 				try {
+					if (entry.handle.kind !== "file") continue;
+
 					const file = await entry.handle.getFile();
 					await processMutation.mutateAsync({
 						file,
