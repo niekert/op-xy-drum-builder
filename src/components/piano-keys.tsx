@@ -867,8 +867,11 @@ export function PianoKeys({
 				return;
 			}
 
-			// Categorize samples
-			const samples = allSamples.map((sample) => ({
+			// Shuffle all samples first for more randomization
+			const shuffledSamples = [...allSamples].sort(() => Math.random() - 0.5);
+
+			// Categorize shuffled samples
+			const samples = shuffledSamples.map((sample) => ({
 				file: sample,
 				category: categorizeSample(sample.name),
 			}));
@@ -895,7 +898,12 @@ export function PianoKeys({
 				categories: string[],
 				fallbackCategory = "other",
 			) => {
-				const availableSamples = categories
+				// Shuffle the categories array for more randomization
+				const shuffledCategories = [...categories].sort(
+					() => Math.random() - 0.5,
+				);
+
+				const availableSamples = shuffledCategories
 					.flatMap(
 						(cat) => categorizedSamples[cat as keyof typeof categorizedSamples],
 					)
@@ -946,35 +954,43 @@ export function PianoKeys({
 				}
 			};
 
-			// Assign samples based on the mapping
-			await Promise.all([
+			// Randomize the order of assignments
+			const assignments = [
 				// Kicks
-				assignSample(0, ["kick"]), // F2
-				assignSample(1, ["kick"]), // F#2
+				[0, ["kick"]], // F2
+				[1, ["kick"]], // F#2
 				// Snares
-				assignSample(2, ["snare"]), // G2
-				assignSample(3, ["snare"]), // G#2
+				[2, ["snare"]], // G2
+				[3, ["snare"]], // G#2
 				// Rims/Claps
-				assignSample(4, ["rim_clap"]), // A2
-				assignSample(5, ["rim_clap"]), // A#2
+				[4, ["rim_clap"]], // A2
+				[5, ["rim_clap"]], // A#2
 				// Closed hihats/shakers
-				assignSample(6, ["closed_hihat"]), // B2
-				assignSample(7, ["closed_hihat"]), // C3
-				assignSample(8, ["closed_hihat"]), // C#3
-				assignSample(9, ["closed_hihat"]), // D3
+				[6, ["closed_hihat"]], // B2
+				[7, ["closed_hihat"]], // C3
+				[8, ["closed_hihat"]], // C#3
+				[9, ["closed_hihat"]], // D3
 				// Open hihat
-				assignSample(10, ["open_hihat"]), // D#3
+				[10, ["open_hihat"]], // D#3
 				// Perc
-				assignSample(11, ["perc"]), // E3
+				[11, ["perc"]], // E3
 				// Toms
-				...[12, 13, 14, 15, 16, 17].map((i) => assignSample(i, ["tom"])), // F3 to B3
+				...[12, 13, 14, 15, 16, 17].map((i) => [i, ["tom"]]), // F3 to B3
 				// Cymbals
-				...[13, 14, 15, 16, 17].map((i) => assignSample(i, ["cymbal"])), // F#3 to A#3
+				...[13, 14, 15, 16, 17].map((i) => [i, ["cymbal"]]), // F#3 to A#3
 				// Random percs for the rest
-				...Array.from({ length: 6 }, (_, i) =>
-					assignSample(18 + i, ["perc", "other"]),
+				...Array.from({ length: 6 }, (_, i) => [18 + i, ["perc", "other"]]),
+			];
+
+			// Shuffle the assignments array
+			const shuffledAssignments = assignments.sort(() => Math.random() - 0.5);
+
+			// Execute assignments
+			await Promise.all(
+				shuffledAssignments.map(([index, categories]) =>
+					assignSample(index as number, categories as string[]),
 				),
-			]);
+			);
 
 			setKeys(newKeys);
 			setCurrentRack(null);
