@@ -120,10 +120,10 @@ export default function Home() {
 						/>
 					</svg>
 
-					<h2 className="text-xl font-bold">Best Used on Desktop</h2>
+					<h2 className="text-xl font-bold">Built for Desktop</h2>
 					<p className="text-muted-foreground">
-						This tool is designed for desktop use. Please switch to a larger
-						screen for the best experience.
+						This tool is built for desktop and filesystem use. Please switch to
+						a larger screen
 					</p>
 				</div>
 
