@@ -1,16 +1,19 @@
+"use client";
+
 import { Dropzone } from "@/components/dropzone";
 import { SampleList } from "@/components/sample-list";
 import { PianoKeys } from "@/components/piano-keys";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { HelpCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
+import { useState } from "react";
+import type { Sample } from "@/components/sample-list";
+
+type DragItem = {
+	type: "folder" | "sample";
+	data: Sample | { path: string; samples: Sample[] };
+} | null;
 
 export default function Home() {
+	const [dragItem, setDragItem] = useState<DragItem>(null);
+
 	return (
 		<div className="min-h-screen bg-background">
 			{/* Header */}
@@ -18,69 +21,8 @@ export default function Home() {
 				<div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
 					<div className="flex items-center gap-3">
 						<span className="font-mono text-sm">
-							<span className="uppercase-preserve">OP-XY</span> drum racks
+							<span className="uppercase-preserve">OP-XY</span> drum builder
 						</span>
-					</div>
-					<div className="flex items-center gap-2">
-						<Popover>
-							<PopoverTrigger asChild>
-								<Button variant="ghost" size="icon" className="h-8 w-8">
-									<HelpCircle className="h-4 w-4" />
-								</Button>
-							</PopoverTrigger>
-							<PopoverContent className="w-[340px]" align="end">
-								<div className="space-y-4">
-									<h3 className="font-mono text-sm">instructions</h3>
-									<ol className="space-y-3 text-sm text-muted-foreground">
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">01.</span>
-											<span>upload your samples using the upload area</span>
-										</li>
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">02.</span>
-											<span>drag samples onto keys in the piano roll</span>
-										</li>
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">03.</span>
-											<span>optionally save your configuration</span>
-										</li>
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">04.</span>
-											<span>press download to get your zip file</span>
-										</li>
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">05.</span>
-											<span>unpack the downloaded zip file</span>
-										</li>
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">06.</span>
-											<span>
-												download{" "}
-												<a
-													href="https://teenage.engineering/guides/fieldkit"
-													target="_blank"
-													rel="noopener noreferrer"
-													className="text-foreground hover:underline"
-												>
-													field kit
-												</a>{" "}
-												and connect your{" "}
-												<span className="uppercase-preserve">OP-XY</span> via
-												usb-c
-											</span>
-										</li>
-										<li className="flex gap-2">
-											<span className="font-mono text-foreground">07.</span>
-											<span>
-												drag the folder onto the presets folder in{" "}
-												<span className="uppercase-preserve">OP-XY</span>
-											</span>
-										</li>
-									</ol>
-								</div>
-							</PopoverContent>
-						</Popover>
-						<ThemeToggle />
 					</div>
 				</div>
 			</header>
@@ -88,8 +30,8 @@ export default function Home() {
 			<main className="mx-auto max-w-7xl px-6 py-8 space-y-8">
 				{/* Hero Section */}
 				<section className="text-center space-y-4 py-8">
-					<h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/50">
-						build drum racks for{" "}
+					<h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-l dark:bg-gradient-to-r from-primary/30 to-primary">
+						drum preset builder for{" "}
 						<span className="uppercase-preserve">OP-XY</span>
 					</h1>
 					<p className="text-muted-foreground max-w-2xl mx-auto">
@@ -97,6 +39,56 @@ export default function Home() {
 						export your drum rack and copy over to
 						<span className="uppercase-preserve"> OP-XY</span>.
 					</p>
+
+					{/* Guide Section */}
+					<div className="mt-8 max-w-xl mx-auto text-left p-4 rounded-lg border bg-card">
+						<h3 className="font-mono text-sm mb-4">quick guide</h3>
+						<ol className="space-y-3 text-sm text-muted-foreground">
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">01.</span>
+								<span>upload your samples using the upload area</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">02.</span>
+								<span>drag samples onto keys in the piano roll</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">03.</span>
+								<span>optionally save your configuration</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">04.</span>
+								<span>press download to get your zip file</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">05.</span>
+								<span>unpack the downloaded zip file</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">06.</span>
+								<span>
+									download{" "}
+									<a
+										href="https://teenage.engineering/guides/fieldkit"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="text-foreground hover:underline"
+									>
+										field kit
+									</a>{" "}
+									and connect your{" "}
+									<span className="uppercase-preserve">OP-XY</span> via usb-c
+								</span>
+							</li>
+							<li className="flex gap-2">
+								<span className="font-mono text-foreground">07.</span>
+								<span>
+									drag the folder onto the presets folder in{" "}
+									<span className="uppercase-preserve">OP-XY</span>
+								</span>
+							</li>
+						</ol>
+					</div>
 				</section>
 
 				{/* Main Content */}
@@ -115,7 +107,10 @@ export default function Home() {
 							browser
 						</span>
 						<div className="h-[400px] border rounded-lg bg-card">
-							<SampleList />
+							<SampleList
+								onDragStart={(type, data) => setDragItem({ type, data })}
+								onDragEnd={() => setDragItem(null)}
+							/>
 						</div>
 					</div>
 
@@ -125,7 +120,7 @@ export default function Home() {
 							mapping
 						</span>
 						<div className="border rounded-lg p-4">
-							<PianoKeys />
+							<PianoKeys dragItem={dragItem} />
 						</div>
 					</div>
 				</div>

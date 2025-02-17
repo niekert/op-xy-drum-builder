@@ -2,8 +2,8 @@
 
 import { useCallback, useState, useRef } from "react";
 import { useDropzone } from "react-dropzone";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { supabase, getDeviceId } from "@/lib/supabase";
 import { nanoid } from "nanoid";
 import { FolderUp, Upload } from "lucide-react";
 
@@ -13,89 +13,136 @@ type UploadError = {
 	details?: string;
 };
 
+type UploadStatus = {
+	total: number;
+	completed: number;
+};
+
 const ALLOWED_EXTENSIONS = [".wav", ".aif", ".aiff", ".mp3"];
 
 export function Dropzone() {
 	const queryClient = useQueryClient();
 	const [error, setError] = useState<string | null>(null);
+	const [uploadStatus, setUploadStatus] = useState<UploadStatus | null>(null);
 	const directoryInputRef = useRef<HTMLInputElement>(null);
+	const [uploading, setUploading] = useState(false);
 
 	const uploadMutation = useMutation({
-		mutationFn: async (file: File) => {
-			// Check file extension
-			const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
-			if (!ALLOWED_EXTENSIONS.includes(ext)) {
-				// Silently ignore unsupported files
-				return;
-			}
+		mutationFn: async (file: { file: File; path: string[] }) => {
+			const deviceId = getDeviceId();
+			const fileName = file.file.name;
+			const directory =
+				file.path.length > 0 ? file.path.join("/").replace(/\s+/g, "_") : "";
 
-			// Extract directory path from file
-			const fullPath = file.webkitRelativePath || file.name;
-			const pathParts = fullPath.split("/");
-			const fileName = pathParts.pop() || file.name;
-			const directory = pathParts.join("/");
+			// Generate unique filename while keeping extension
+			const ext = `.${fileName.split(".").pop()?.toLowerCase()}`;
+			const storageFileName = `${nanoid()}${ext}`;
 
-			// Generate a unique storage filename while keeping the extension
-			const uniqueId = nanoid();
-			const storageFileName = directory
-				? `${directory}/${uniqueId}${ext}`
-				: `${uniqueId}${ext}`;
-
-			// Upload file with unique name
-			const { error: uploadError } = await supabase.storage
+			// Upload file to storage
+			const { error: uploadError, data } = await supabase.storage
 				.from("samples")
-				.upload(storageFileName, file);
+				.upload(
+					directory
+						? `${deviceId}/${directory}/${storageFileName}`
+						: `${deviceId}/${storageFileName}`,
+					file.file,
+					{
+						cacheControl: "3600",
+						upsert: false,
+					},
+				);
 
-			if (uploadError) {
-				throw uploadError;
-			}
+			if (uploadError) throw uploadError;
 
-			// Get the public URL
+			// Get public URL
 			const {
-				data: { publicUrl } = {},
-			} = supabase.storage.from("samples").getPublicUrl(storageFileName);
+				data: { publicUrl },
+			} = supabase.storage.from("samples").getPublicUrl(data.path);
 
 			// Create a record in the samples table with original filename and directory
 			const { error: dbError } = await supabase.from("samples").insert({
 				name: fileName,
 				url: publicUrl,
 				storage_path: storageFileName,
-				directory: directory || "/",
-				duration: 0, // TODO: Get actual duration from audio file
+				directory: file.path.length > 0 ? file.path.join("/") : "/",
+				device_id: deviceId,
+				duration: 0,
 			});
 
-			if (dbError) {
-				// If database insert fails, clean up the uploaded file
-				await supabase.storage.from("samples").remove([storageFileName]);
-				throw dbError;
-			}
-		},
-		onError: (error: UploadError) => {
-			console.error("Error uploading file:", error);
-			setError(error.message || "Failed to upload file");
-		},
-		onSuccess: () => {
-			setError(null);
-			queryClient.invalidateQueries({ queryKey: ["samples"] });
+			if (dbError) throw dbError;
+
+			// Ensure sample list is updated
+			queryClient.invalidateQueries({ queryKey: ["samples", getDeviceId()] });
+
+			return { fileName, publicUrl };
 		},
 	});
 
 	const onDrop = useCallback(
 		async (acceptedFiles: File[]) => {
 			setError(null);
+
+			// Filter valid files first
+			const validFiles = acceptedFiles.filter((file) => {
+				const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
+				return ALLOWED_EXTENSIONS.includes(ext);
+			});
+
+			// Initialize upload status with valid files count
+			setUploadStatus({ total: validFiles.length, completed: 0 });
+
 			// Upload files sequentially to avoid overwhelming the server
-			for (const file of acceptedFiles) {
-				await uploadMutation.mutateAsync(file);
+			for (const file of validFiles) {
+				try {
+					await uploadMutation.mutateAsync({ file, path: [] });
+					// Update progress after successful upload
+					setUploadStatus((prev) =>
+						prev ? { ...prev, completed: prev.completed + 1 } : null,
+					);
+				} catch (error) {
+					console.error("Error uploading", file.name, error);
+					setError(`Failed to upload ${file.name}`);
+				}
 			}
+
+			// Clear upload status when done
+			setUploadStatus(null);
 		},
 		[uploadMutation],
 	);
 
-	const handleDirectorySelect = (
+	const handleDirectoryUpload = async (
 		event: React.ChangeEvent<HTMLInputElement>,
 	) => {
-		const files = Array.from(event.target.files || []);
-		onDrop(files);
+		const allFiles = Array.from(event.target.files || []);
+		setUploading(true);
+
+		// Filter valid files first
+		const validFiles = allFiles.filter((file) => {
+			const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
+			return ALLOWED_EXTENSIONS.includes(ext);
+		});
+
+		setUploadStatus({ total: validFiles.length, completed: 0 });
+
+		try {
+			for (const file of validFiles) {
+				const path = file.webkitRelativePath.split("/").slice(0, -1);
+				await uploadMutation.mutateAsync({ file, path });
+				setUploadStatus((prev) => {
+					if (!prev) return { total: validFiles.length, completed: 1 };
+					return {
+						total: prev.total,
+						completed: prev.completed + 1,
+					};
+				});
+			}
+		} catch (error) {
+			console.error("Error uploading files:", error);
+			setError("Failed to upload files");
+		}
+
+		setUploading(false);
 	};
 
 	const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -107,6 +154,20 @@ export function Dropzone() {
 		},
 		disabled: uploadMutation.isPending,
 		multiple: true,
+	});
+
+	const { data: samples, isLoading } = useQuery({
+		queryKey: ["samples", getDeviceId()],
+		queryFn: async () => {
+			const { data, error } = await supabase
+				.from("samples")
+				.select("*")
+				.eq("device_id", getDeviceId())
+				.order("created_at", { ascending: false });
+
+			if (error) throw error;
+			return data;
+		},
 	});
 
 	return (
@@ -133,8 +194,8 @@ export function Dropzone() {
 					</div>
 					<div className="space-y-1">
 						<p className="text-sm font-medium text-foreground">
-							{uploadMutation.isPending
-								? "Uploading..."
+							{uploadStatus
+								? `Uploading ${uploadStatus.completed} of ${uploadStatus.total} files...`
 								: "Drop audio samples here"}
 						</p>
 						{error ? (
@@ -145,6 +206,19 @@ export function Dropzone() {
 							</p>
 						)}
 					</div>
+					{/* Upload Progress */}
+					{uploadStatus && (
+						<div className="w-full max-w-xs space-y-2">
+							<div className="h-1 bg-muted rounded-full overflow-hidden">
+								<div
+									className="h-full bg-primary transition-all duration-200"
+									style={{
+										width: `${(uploadStatus.completed / uploadStatus.total) * 100}%`,
+									}}
+								/>
+							</div>
+						</div>
+					)}
 				</div>
 			</div>
 
@@ -162,11 +236,14 @@ export function Dropzone() {
 				<input
 					type="file"
 					ref={directoryInputRef}
-					onChange={handleDirectorySelect}
+					onChange={handleDirectoryUpload}
 					className="hidden"
-					webkitdirectory=""
-					directory=""
-					multiple
+					{...({
+						webkitdirectory: "",
+						mozdirectory: "",
+						directory: "",
+						multiple: true,
+					} as any)}
 				/>
 			</div>
 		</div>

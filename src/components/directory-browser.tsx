@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import {
+	useState,
+	useMemo,
+	useRef,
+	useEffect,
+	useCallback,
+	Fragment,
+} from "react";
 import { ChevronRight, ChevronDown, Folder, Music } from "lucide-react";
 import * as Tone from "tone";
 import type { Sample } from "./sample-list";
@@ -18,12 +25,19 @@ type DirectoryBrowserProps = {
 	samples: Sample[];
 	onSampleSelect: (sample: Sample) => void;
 	selectedSample: Sample | null;
+	onDragStart: (
+		type: "folder" | "sample",
+		data: Sample | { path: string; samples: Sample[] },
+	) => void;
+	onDragEnd: () => void;
 };
 
 export function DirectoryBrowser({
 	samples,
 	onSampleSelect,
 	selectedSample,
+	onDragStart,
+	onDragEnd,
 }: DirectoryBrowserProps) {
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
 	const playerRef = useRef<Tone.Player | null>(null);
@@ -315,6 +329,56 @@ export function DirectoryBrowser({
 		queryClient,
 	]);
 
+	const handleSampleDragStart = (e: React.DragEvent, sample: Sample) => {
+		e.stopPropagation();
+		onDragStart("sample", sample);
+		e.dataTransfer.setData("application/json", JSON.stringify(sample));
+
+		// Create drag preview
+		const dragPreview = document.createElement("div");
+		dragPreview.className =
+			"fixed left-0 top-0 bg-background border rounded-md p-2 pointer-events-none flex items-center gap-2 text-xs";
+		dragPreview.innerHTML = `
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M12 2v20M2 12h20" />
+			</svg>
+			<span class="font-mono">audio</span>
+		`;
+		document.body.appendChild(dragPreview);
+		e.dataTransfer.setDragImage(dragPreview, 20, 20);
+		setTimeout(() => document.body.removeChild(dragPreview), 0);
+	};
+
+	const handleFolderDragStart = (e: React.DragEvent, node: TreeNode) => {
+		e.stopPropagation();
+		const folderData = {
+			path: node.path,
+			samples: getAllSamplesInFolder(node),
+		};
+		onDragStart("folder", folderData);
+		e.dataTransfer.setData(
+			"application/json",
+			JSON.stringify({
+				type: "folder",
+				...folderData,
+			}),
+		);
+
+		// Create drag preview
+		const dragPreview = document.createElement("div");
+		dragPreview.className =
+			"fixed left-0 top-0 bg-background border rounded-md p-2 pointer-events-none flex items-center gap-2 text-xs";
+		dragPreview.innerHTML = `
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+			</svg>
+			<span class="font-mono">${node.name}</span>
+		`;
+		document.body.appendChild(dragPreview);
+		e.dataTransfer.setDragImage(dragPreview, 20, 20);
+		setTimeout(() => document.body.removeChild(dragPreview), 0);
+	};
+
 	const renderNode = (node: TreeNode) => {
 		const isExpanded = expandedPaths.has(node.path);
 		const isSelected =
@@ -333,9 +397,18 @@ export function DirectoryBrowser({
 
 		const level = node.path.split("/").length - 1;
 
-		return (
-			<div key={node.path} style={{ marginLeft: `${level * 16}px` }}>
+		console.log("node", node);
+
+		if (node.type === "sample") {
+			return (
 				<div
+					draggable
+					onDragStart={(e) =>
+						node.sample && handleSampleDragStart(e, node.sample)
+					}
+					onDragEnd={onDragEnd}
+					key={node.path}
+					style={{ marginLeft: `${level * 16}px` }}
 					className={`
 						flex items-center gap-2 p-1 rounded-md outline-none
 						${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
@@ -364,71 +437,103 @@ export function DirectoryBrowser({
 							}
 						}
 					}}
-					draggable={node.type === "sample"}
-					onDragStart={(e) => {
-						if (node.type === "sample" && node.sample) {
-							e.dataTransfer.setData(
-								"application/json",
-								JSON.stringify(node.sample),
-							);
-							// Create a custom drag image
-							const dragPreview = document.createElement("div");
-							dragPreview.className =
-								"fixed left-0 top-0 bg-background border rounded-md p-2 pointer-events-none flex items-center gap-2 text-xs";
-							dragPreview.innerHTML = `
-								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<path d="M12 2v20M2 12h20" />
-								</svg>
-								<span class="font-mono">audio</span>
-							`;
-							document.body.appendChild(dragPreview);
-							e.dataTransfer.setDragImage(dragPreview, 20, 20);
-							// Clean up after drag
-							setTimeout(() => document.body.removeChild(dragPreview), 0);
-						}
-					}}
-					role={node.type === "sample" ? "button" : "treeitem"}
+					role="treeitem"
 					tabIndex={isSelected ? 0 : -1}
 					aria-selected={isSelected}
-					aria-expanded={node.type === "directory" ? isExpanded : undefined}
 				>
-					{node.type === "directory" ? (
-						<>
-							<button
-								type="button"
-								onClick={(e) => {
-									e.stopPropagation();
+					<div className="w-4 flex-shrink-0" /> {/* Spacing for alignment */}
+					<Music className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+					<span className="text-sm truncate">{node.name}</span>
+				</div>
+			);
+		}
+
+		return (
+			<Fragment key={node.path}>
+				<div
+					draggable
+					onDragStart={(e) => handleFolderDragStart(e, node)}
+					onDragEnd={onDragEnd}
+					key={node.path}
+					style={{ marginLeft: `${level * 16}px` }}
+					className={`
+					flex flex-col gap-1
+					${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
+					${isSelected && !showHighlight ? "bg-muted/30" : ""}
+				`}
+				>
+					<div
+						className="flex items-center gap-2 p-1 rounded-md outline-none"
+						onClick={(e) => {
+							if (node.type === "directory") {
+								e.stopPropagation();
+								setSelectedPath(node.path);
+								// Clear sample selection when selecting a directory
+								queryClient.setQueryData(["selectedSample"], null);
+								toggleExpand(node.path);
+							} else if (node.sample) {
+								onSampleSelect(node.sample);
+								setSelectedPath("");
+							}
+						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" || e.key === " ") {
+								e.preventDefault();
+								if (node.type === "directory") {
+									setSelectedPath(node.path);
 									toggleExpand(node.path);
-								}}
-								className="p-0.5 hover:bg-muted rounded"
-								aria-label={`${isExpanded ? "Collapse" : "Expand"} ${
-									node.name
-								} folder`}
-							>
-								{isExpanded ? (
-									<ChevronDown className="h-4 w-4 text-muted-foreground" />
-								) : (
-									<ChevronRight className="h-4 w-4 text-muted-foreground" />
-								)}
-							</button>
+								} else if (node.sample) {
+									onSampleSelect(node.sample);
+								}
+							}
+						}}
+						role="treeitem"
+						tabIndex={isSelected ? 0 : -1}
+						aria-selected={isSelected}
+						aria-expanded={node.type === "directory" ? isExpanded : undefined}
+					>
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								toggleExpand(node.path);
+							}}
+							className="p-0.5 hover:bg-muted rounded"
+							aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
+						>
+							{isExpanded ? (
+								<ChevronDown className="h-4 w-4 text-muted-foreground" />
+							) : (
+								<ChevronRight className="h-4 w-4 text-muted-foreground" />
+							)}
+						</button>
+						<div className="flex items-center gap-2 cursor-grab active:cursor-grabbing">
 							<Folder className="h-4 w-4 text-muted-foreground" />
 							<span className="text-sm">{node.name}</span>
-						</>
-					) : (
-						<>
-							<div className="w-4" /> {/* Spacing for alignment */}
-							<Music className="h-4 w-4 text-muted-foreground" />
-							<span className="text-sm">{node.name}</span>
-						</>
-					)}
+						</div>
+					</div>
 				</div>
-				{node.type === "directory" && isExpanded && (
-					<div className="my-1">
+				{isExpanded && (
+					<div className="space-y-1">
 						{node.children.map((child) => renderNode(child))}
 					</div>
 				)}
-			</div>
+			</Fragment>
 		);
+	};
+
+	const getAllSamplesInFolder = (node: TreeNode): Sample[] => {
+		const samples: Sample[] = [];
+
+		const traverse = (node: TreeNode) => {
+			if (node.type === "sample" && node.sample) {
+				samples.push(node.sample);
+			}
+			node.children.forEach(traverse);
+		};
+
+		traverse(node);
+		return samples;
 	};
 
 	return (

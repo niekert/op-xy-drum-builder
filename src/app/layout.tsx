@@ -17,8 +17,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-	title: "OP-XY Drum Racks",
-	description: "Create drum racks for your OP-XY",
+	title: "OP-XY Drum Builder",
+	description: "Create drum rack presets for your OP-XY",
 };
 
 export default function RootLayout({
@@ -27,7 +27,7 @@ export default function RootLayout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<html lang="en" className={`${inter.variable} ${spaceMono.variable}`}>
+		<html lang="en" className={`${inter.variable} ${spaceMono.variable} dark`}>
 			<body className="antialiased">
 				<Providers>{children}</Providers>
 			</body>

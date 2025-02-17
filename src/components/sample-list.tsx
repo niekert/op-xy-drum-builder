@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, startTransition } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import { supabase, getDeviceId } from "@/lib/supabase";
 import * as Tone from "tone";
 import { DirectoryBrowser } from "./directory-browser";
 
@@ -14,6 +14,9 @@ export type Sample = {
 	duration: number;
 	createdAt: string;
 	directory: string;
+	channels?: number;
+	sample_rate?: number;
+	rms_level?: number;
 };
 
 type WaveformData = {
@@ -25,49 +28,31 @@ async function fetchSamples() {
 	const { data, error } = await supabase
 		.from("samples")
 		.select("*")
+		.eq("device_id", getDeviceId())
 		.order("created_at", { ascending: false });
 
 	if (error) throw error;
 	return data || [];
 }
 
-export function SampleList() {
+type SampleListProps = {
+	onDragStart: (
+		type: "folder" | "sample",
+		data: Sample | { path: string; samples: Sample[] },
+	) => void;
+	onDragEnd: () => void;
+};
+
+export function SampleList({ onDragStart, onDragEnd }: SampleListProps) {
 	const queryClient = useQueryClient();
+	const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+	const [waveform, setWaveform] = useState<WaveformData | null>(null);
 
 	// Query for samples
 	const { data: samples = [], isLoading } = useQuery({
-		queryKey: ["samples"],
+		queryKey: ["samples", getDeviceId()],
 		queryFn: fetchSamples,
 	});
-
-	// Query for selected sample and waveform
-	const { data: selectedSample } = useQuery<Sample | null>({
-		queryKey: ["selectedSample"],
-		initialData: null,
-	});
-
-	const { data: waveform } = useQuery<WaveformData | null>({
-		queryKey: ["waveform"],
-		initialData: null,
-	});
-
-	// Set up real-time subscription
-	useEffect(() => {
-		const channel = supabase
-			.channel("samples")
-			.on(
-				"postgres_changes",
-				{ event: "*", schema: "public", table: "samples" },
-				() => {
-					queryClient.invalidateQueries({ queryKey: ["samples"] });
-				},
-			)
-			.subscribe();
-
-		return () => {
-			channel.unsubscribe();
-		};
-	}, [queryClient]);
 
 	// Delete mutation
 	const deleteMutation = useMutation({
@@ -93,8 +78,8 @@ export function SampleList() {
 
 			// Clear selected sample if it was deleted
 			if (selectedSample?.id === sample.id) {
-				queryClient.setQueryData(["selectedSample"], null);
-				queryClient.setQueryData(["waveform"], null);
+				setSelectedSample(null);
+				setWaveform(null);
 			}
 		},
 		onSuccess: () => {
@@ -104,7 +89,14 @@ export function SampleList() {
 
 	const analyzeSample = async (sample: Sample) => {
 		try {
-			const buffer = await Tone.Buffer.fromUrl(sample.url);
+			// Start transition for UI updates
+			startTransition(() => {
+				setSelectedSample(sample);
+			});
+
+			// Ensure the URL is properly decoded for playback
+			const decodedUrl = decodeURIComponent(sample.url);
+			const buffer = await Tone.Buffer.fromUrl(decodedUrl);
 			const audioBuffer = buffer.get();
 			if (!audioBuffer) return;
 
@@ -112,6 +104,7 @@ export function SampleList() {
 			const peaks: number[] = [];
 			const blockSize = Math.floor(channelData.length / 100);
 
+			// Calculate peaks for waveform
 			for (let i = 0; i < 100; i++) {
 				const start = blockSize * i;
 				let peak = 0;
@@ -124,11 +117,43 @@ export function SampleList() {
 				peaks.push(peak);
 			}
 
-			queryClient.setQueryData(["waveform"], {
-				peaks,
-				duration: audioBuffer.duration,
+			// Calculate RMS (volume) level
+			let rmsSum = 0;
+			for (let i = 0; i < channelData.length; i++) {
+				rmsSum += channelData[i] * channelData[i];
+			}
+			const rmsLevel = Math.sqrt(rmsSum / channelData.length);
+			const rmsDb = 20 * Math.log10(rmsLevel);
+
+			// Update sample with audio details
+			const { error } = await supabase
+				.from("samples")
+				.update({
+					duration: audioBuffer.duration,
+					channels: audioBuffer.numberOfChannels,
+					sample_rate: audioBuffer.sampleRate,
+					rms_level: rmsDb,
+				})
+				.eq("id", sample.id);
+
+			if (error) {
+				console.error("Error updating sample details:", error);
+			}
+
+			// Update the UI with the new details
+			startTransition(() => {
+				setSelectedSample({
+					...sample,
+					duration: audioBuffer.duration,
+					channels: audioBuffer.numberOfChannels,
+					sample_rate: audioBuffer.sampleRate,
+					rms_level: rmsDb,
+				});
+				setWaveform({
+					peaks,
+					duration: audioBuffer.duration,
+				});
 			});
-			queryClient.setQueryData(["selectedSample"], sample);
 		} catch (error) {
 			console.error("Error analyzing sample:", error);
 		}
@@ -138,7 +163,12 @@ export function SampleList() {
 		e: React.DragEvent<HTMLDivElement>,
 		sample: Sample,
 	) => {
-		e.dataTransfer.setData("text/plain", JSON.stringify(sample));
+		// Ensure we pass the decoded URL for drag and drop
+		const sampleWithDecodedUrl = {
+			...sample,
+			url: decodeURI(sample.url),
+		};
+		e.dataTransfer.setData("text/plain", JSON.stringify(sampleWithDecodedUrl));
 
 		// Create a custom drag preview
 		const dragPreview = document.createElement("div");
@@ -193,7 +223,7 @@ export function SampleList() {
 
 	if (samples.length === 0) {
 		return (
-			<div className="flex flex-col items-center justify-center gap-2 text-center">
+			<div className="flex flex-col items-center justify-center h-full gap-2 text-center">
 				<svg
 					className="h-4 w-4 text-muted-foreground"
 					xmlns="http://www.w3.org/2000/svg"
@@ -201,9 +231,9 @@ export function SampleList() {
 					viewBox="0 0 24 24"
 					stroke="currentColor"
 					strokeWidth={2}
-					aria-label="No samples uploaded"
+					aria-label="No samples"
 				>
-					<title>No samples uploaded</title>
+					<title>No samples</title>
 					<path
 						strokeLinecap="round"
 						strokeLinejoin="round"
@@ -211,7 +241,7 @@ export function SampleList() {
 					/>
 				</svg>
 				<span className="text-sm text-muted-foreground">
-					drag and drop samples here
+					use the upload area above to add samples
 				</span>
 			</div>
 		);
@@ -224,6 +254,8 @@ export function SampleList() {
 					samples={samples}
 					onSampleSelect={analyzeSample}
 					selectedSample={selectedSample}
+					onDragStart={onDragStart}
+					onDragEnd={onDragEnd}
 				/>
 			</div>
 
@@ -245,6 +277,7 @@ export function SampleList() {
 										viewBox="0 0 24 24"
 										aria-label="Delete sample"
 									>
+										<title>Delete sample</title>
 										<path
 											strokeLinecap="round"
 											strokeLinejoin="round"
@@ -254,11 +287,34 @@ export function SampleList() {
 									</svg>
 								</button>
 							</div>
+							<div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+								<div>
+									<span className="block font-mono">duration</span>
+									<span>{selectedSample.duration?.toFixed(2)}s</span>
+								</div>
+								<div>
+									<span className="block font-mono">channels</span>
+									<span>{selectedSample.channels || "-"}</span>
+								</div>
+								<div>
+									<span className="block font-mono">sample rate</span>
+									<span>
+										{selectedSample.sample_rate
+											? `${(selectedSample.sample_rate / 1000).toFixed(1)}kHz`
+											: "-"}
+									</span>
+								</div>
+								<div>
+									<span className="block font-mono">level</span>
+									<span>
+										{selectedSample.rms_level
+											? `${selectedSample.rms_level.toFixed(1)}dB`
+											: "-"}
+									</span>
+								</div>
+							</div>
 							<p className="text-xs text-muted-foreground">
 								Directory: {selectedSample.directory}
-							</p>
-							<p className="text-xs text-muted-foreground">
-								Duration: {selectedSample.duration.toFixed(2)}s
 							</p>
 						</div>
 						{waveform && (
@@ -269,6 +325,7 @@ export function SampleList() {
 									className="h-full w-full"
 									aria-label="Waveform visualization"
 								>
+									<title>Waveform visualization</title>
 									<path
 										d={`M ${waveform.peaks
 											.map(
@@ -287,9 +344,7 @@ export function SampleList() {
 					</div>
 				) : (
 					<div className="flex items-center justify-center h-full">
-						<p className="text-sm text-muted-foreground">
-							Select a sample to view waveform
-						</p>
+						<p className="text-sm text-muted-foreground">Select a sample</p>
 					</div>
 				)}
 			</div>

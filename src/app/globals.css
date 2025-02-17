@@ -4,54 +4,7 @@
 
 @layer base {
 	:root {
-		/* TE-inspired colors - more stark contrast and industrial feel */
-		--background: 0 0% 100%;
-		--foreground: 0 0% 0%;
-		--card: 0 0% 98%;
-		--card-foreground: 0 0% 0%;
-		--popover: 0 0% 100%;
-		--popover-foreground: 0 0% 0%;
-		--primary: 0 0% 0%;
-		--primary-foreground: 0 0% 100%;
-		--secondary: 0 0% 96%;
-		--secondary-foreground: 0 0% 0%;
-		--muted: 0 0% 96%;
-		--muted-foreground: 0 0% 40%;
-		--accent: 0 0% 94%;
-		--accent-foreground: 0 0% 0%;
-		--destructive: 0 84.2% 60.2%;
-		--destructive-foreground: 0 0% 100%;
-		--border: 0 0% 90%;
-		--input: 0 0% 90%;
-		--ring: 0 0% 0%;
-		--radius: 0.25rem;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		:root:not(.light) {
-			--background: 0 0% 0%;
-			--foreground: 0 0% 100%;
-			--card: 0 0% 2%;
-			--card-foreground: 0 0% 100%;
-			--popover: 0 0% 0%;
-			--popover-foreground: 0 0% 100%;
-			--primary: 0 0% 100%;
-			--primary-foreground: 0 0% 0%;
-			--secondary: 0 0% 8%;
-			--secondary-foreground: 0 0% 100%;
-			--muted: 0 0% 8%;
-			--muted-foreground: 0 0% 60%;
-			--accent: 0 0% 12%;
-			--accent-foreground: 0 0% 100%;
-			--destructive: 0 62.8% 30.6%;
-			--destructive-foreground: 0 0% 100%;
-			--border: 0 0% 15%;
-			--input: 0 0% 15%;
-			--ring: 0 0% 100%;
-		}
-	}
-
-	.dark {
+		/* Dark theme colors only */
 		--background: 0 0% 0%;
 		--foreground: 0 0% 100%;
 		--card: 0 0% 2%;
@@ -71,6 +24,7 @@
 		--border: 0 0% 15%;
 		--input: 0 0% 15%;
 		--ring: 0 0% 100%;
+		--radius: 0.25rem;
 	}
 }
 
@@ -92,9 +46,24 @@
 		@apply font-mono tracking-tight lowercase;
 	}
 
-	/* Subtle transitions */
-	* {
-		@apply transition-colors duration-200;
+	/* Specific transitions instead of all colors */
+	button,
+	a {
+		@apply transition-[background-color,border-color] duration-200;
+	}
+
+	/* Background transitions */
+	.bg-background,
+	.bg-card,
+	.bg-popover,
+	.bg-muted {
+		@apply transition-[background-color] duration-200;
+	}
+
+	/* Border transitions */
+	.border,
+	.border-border {
+		@apply transition-[border-color] duration-200;
 	}
 
 	/* TE-style buttons */
