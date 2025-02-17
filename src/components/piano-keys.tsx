@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState, useRef } from "react";
 import * as Tone from "tone";
-import type { Sample } from "./sample-list";
+import { storage } from "@/lib/storage";
+import type { Sample, DrumRack } from "@/lib/storage";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, Save, FolderOpen, HelpCircle } from "lucide-react";
 import JSZip from "jszip";
@@ -13,8 +14,6 @@ import {
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { supabase, getDeviceId } from "@/lib/supabase";
-import type { PostgrestError } from "@supabase/supabase-js";
 import {
 	Dialog,
 	DialogContent,
@@ -28,15 +27,6 @@ type Key = {
 	sample?: Sample;
 	isBlack: boolean;
 	isLoading?: boolean;
-};
-
-type DrumRack = {
-	id: string;
-	name: string;
-	configuration: {
-		keys: Key[];
-	};
-	created_at: string;
 };
 
 const INITIAL_KEYS: Key[] = [
@@ -139,35 +129,16 @@ export function PianoKeys({
 	const [presetName, setPresetName] = useState("");
 	const [isDownloadOpen, setIsDownloadOpen] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
-	const [editParams, setEditParams] = useState<
-		Record<
-			string,
-			{
-				startTime: number;
-				endTime: number;
-				gain: number;
-				fadeIn: number;
-				fadeOut: number;
-				isNormalized: boolean;
-				isReversed: boolean;
-			}
-		>
-	>({});
 
 	// Fetch drum racks
 	useEffect(() => {
 		const fetchDrumRacks = async () => {
-			const { data, error } = await supabase
-				.from("drum_racks")
-				.select("*")
-				.order("created_at", { ascending: false });
-
-			if (error) {
+			try {
+				const racks = await storage.getDrumRacks();
+				setDrumRacks(racks);
+			} catch (error) {
 				console.error("Error fetching drum racks:", error);
-				return;
 			}
-
-			setDrumRacks(data || []);
 		};
 
 		fetchDrumRacks();
@@ -226,11 +197,19 @@ export function PianoKeys({
 					delete buffersRef.current[targetNote];
 				}
 
-				// Load new buffer
-				const buffer = await Tone.Buffer.fromUrl(sample.url);
-				buffersRef.current[targetNote] = buffer;
+				// Get the file from the file system
+				const file = await storage.getFile(sample.filePath, sample.directoryId);
+				const arrayBuffer = await file.arrayBuffer();
 
-				// Create new player
+				// Decode the audio data first
+				const audioContext = new AudioContext();
+				const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+				// Create Tone.js buffer from the decoded audio data
+				const buffer = new Tone.ToneAudioBuffer();
+				buffer.fromArray(audioBuffer.getChannelData(0));
+
+				// Create new player with the buffer
 				const player = new Tone.Player(buffer).toDestination();
 				playersRef.current[targetNote] = player;
 
@@ -390,28 +369,13 @@ export function PianoKeys({
 					})),
 				};
 
-				const { error } = await supabase.from("drum_racks").insert({
-					name: presetName.trim(),
+				const newRack = await storage.addDrumRack(
+					presetName.trim(),
 					configuration,
-					device_id: getDeviceId(),
-				});
-
-				if (error) throw error;
-
-				// Refresh drum racks list
-				const { data: updatedRacks } = await supabase
-					.from("drum_racks")
-					.select("*")
-					.order("created_at", { ascending: false });
-
-				setDrumRacks(updatedRacks || []);
-
-				// Find the newly created rack and set it as current
-				const newRack = updatedRacks?.find((rack) => rack.name === presetName);
-				if (newRack) {
-					setCurrentRack(newRack);
-					setRackName(newRack.name);
-				}
+				);
+				setDrumRacks(await storage.getDrumRacks());
+				setCurrentRack(newRack);
+				setRackName(newRack.name);
 			} catch (error) {
 				console.error("Error saving drum rack:", error);
 				setError("Failed to save drum rack");
@@ -432,163 +396,61 @@ export function PianoKeys({
 		// Get all mapped samples
 		const mappedKeys = keys.filter((key) => key.sample);
 
-		console.log("mapped", mappedKeys);
+		// Add each sample file to the zip
+		for (const key of mappedKeys) {
+			if (!key.sample) continue;
 
-		// Create regions array for patch.json
-		const regions = await Promise.all(
-			mappedKeys.map(async (key) => {
-				if (!key.sample) return null;
+			try {
+				const file = await storage.getFile(
+					key.sample.filePath,
+					key.sample.directoryId,
+				);
 
-				// Convert note to MIDI note number
-				const midiNote = getMidiNoteNumber(key.note);
-				const params = editParams[key.sample.id];
-
-				// Fetch and process the sample if it has edit parameters
-				if (params) {
-					try {
-						const response = await fetch(key.sample.url);
-						const originalArrayBuffer = await response.arrayBuffer();
-
-						// Clone the array buffer for audio decoding
-						const audioArrayBuffer = originalArrayBuffer.slice(0);
-						const audioContext = new AudioContext();
-						const audioBuffer =
-							await audioContext.decodeAudioData(audioArrayBuffer);
-						const framecount = audioBuffer.length;
-
-						// Create a new buffer for the edited audio
-						const sampleRate = audioBuffer.sampleRate;
-						const startSample = Math.floor(params.startTime * sampleRate);
-						const endSample = Math.floor(params.endTime * sampleRate);
-						const length = endSample - startSample;
-
-						const newBuffer = audioContext.createBuffer(
-							audioBuffer.numberOfChannels,
-							length,
-							sampleRate,
-						);
-
-						// Process each channel
-						for (
-							let channel = 0;
-							channel < audioBuffer.numberOfChannels;
-							channel++
-						) {
-							const inputData = audioBuffer.getChannelData(channel);
-							const outputData = newBuffer.getChannelData(channel);
-
-							// Copy the trimmed section
-							for (let i = 0; i < length; i++) {
-								outputData[i] = inputData[startSample + i];
-							}
-
-							// Apply gain
-							const gain = params.isNormalized
-								? params.gain / Math.max(...outputData.map(Math.abs))
-								: params.gain;
-							for (let i = 0; i < length; i++) {
-								outputData[i] *= gain;
-							}
-
-							// Apply fade in
-							const fadeInSamples = Math.floor(params.fadeIn * sampleRate);
-							for (let i = 0; i < fadeInSamples; i++) {
-								const factor = i / fadeInSamples;
-								outputData[i] *= factor;
-							}
-
-							// Apply fade out
-							const fadeOutSamples = Math.floor(params.fadeOut * sampleRate);
-							for (let i = 0; i < fadeOutSamples; i++) {
-								const factor = 1 - i / fadeOutSamples;
-								outputData[length - 1 - i] *= factor;
-							}
-
-							// Reverse if needed
-							if (params.isReversed) {
-								outputData.reverse();
-							}
-						}
-
-						// Convert the buffer to WAV
-						const wavData = audioBufferToWav(newBuffer);
-						presetFolder.file(key.sample.name, wavData);
-
-						return {
-							"fade.in": 0,
-							"fade.out": 0,
-							framecount: length,
-							hikey: midiNote,
-							lokey: midiNote,
-							pan: 0,
-							"pitch.keycenter": 60,
-							playmode: "oneshot",
-							reverse: false,
-							sample: key.sample.name,
-							"sample.end": length,
-							transpose: 0,
-							tune: 0,
-						};
-					} catch (error) {
-						console.error(`Failed to process ${key.sample.name}:`, error);
-						return null;
-					}
-				}
-
-				// If no edit parameters or processing failed, use the original file
-				try {
-					const response = await fetch(key.sample.url);
-					const originalArrayBuffer = await response.arrayBuffer();
-
-					// Clone the array buffer for audio decoding
-					const audioArrayBuffer = originalArrayBuffer.slice(0);
-					const audioContext = new AudioContext();
-					const audioBuffer =
-						await audioContext.decodeAudioData(audioArrayBuffer);
-					const framecount = audioBuffer.length;
-
-					// Use the original array buffer for the WAV file
-					presetFolder.file(
-						key.sample.name,
-						new Uint8Array(originalArrayBuffer),
-					);
-
-					return {
-						"fade.in": 0,
-						"fade.out": 0,
-						framecount: framecount,
-						hikey: midiNote,
-						lokey: midiNote,
-						pan: 0,
-						"pitch.keycenter": 60,
-						playmode: "oneshot",
-						reverse: false,
-						sample: key.sample.name,
-						"sample.end": framecount,
-						transpose: 0,
-						tune: 0,
-					};
-				} catch (error) {
-					console.error(`Failed to download ${key.sample.name}:`, error);
-					return null;
-				}
-			}),
-		);
+				// Add file to zip
+				presetFolder.file(key.sample.name, file);
+			} catch (error) {
+				console.error("Error adding file to zip:", error);
+				setError("Failed to add file to zip");
+				return;
+			}
+		}
 
 		// Create patch.json
-		const patch = {
+		const regions = mappedKeys.map((key) => {
+			const midiNote = getMidiNoteNumber(key.note);
+			return {
+				"fade.in": 0,
+				"fade.out": 0,
+				framecount: Math.floor(
+					(key.sample?.duration || 0) * (key.sample?.sampleRate || 44100),
+				),
+				hikey: midiNote,
+				lokey: midiNote,
+				pan: 0,
+				"pitch.keycenter": 60,
+				playmode: "oneshot",
+				reverse: false,
+				sample: key.sample?.name,
+				"sample.end": Math.floor(
+					(key.sample?.duration || 0) * (key.sample?.sampleRate || 44100),
+				),
+				transpose: 0,
+				tune: 0,
+			};
+		});
+
+		const presetData = {
 			...DEFAULT_PATCH,
-			regions: regions.filter(Boolean),
+			regions,
 		};
 
-		// Add patch.json to zip
-		presetFolder.file("patch.json", JSON.stringify(patch, null, 2));
+		presetFolder.file("patch.json", JSON.stringify(presetData, null, 2));
 
 		try {
-			// Generate the zip file
+			// Generate zip file
 			const content = await zip.generateAsync({ type: "blob" });
 
-			// Create download link and trigger download
+			// Create download link
 			const url = URL.createObjectURL(content);
 			const a = document.createElement("a");
 			a.href = url;
@@ -598,13 +460,13 @@ export function PianoKeys({
 			document.body.removeChild(a);
 			URL.revokeObjectURL(url);
 
-			// Close popover and reset name if this was a new preset
 			setIsDownloadOpen(false);
+			setPresetName("");
 		} catch (error) {
-			console.error("Failed to create zip file:", error);
-			setError("Failed to create download");
+			console.error("Error generating zip:", error);
+			setError("Failed to generate zip file");
 		}
-	}, [keys, presetName, currentRack, editParams]);
+	}, [keys, presetName, currentRack]);
 
 	const handleSave = async () => {
 		if (!rackName.trim() && !currentRack) {
@@ -621,33 +483,18 @@ export function PianoKeys({
 				})),
 			};
 
-			let error: PostgrestError | null;
 			if (currentRack) {
 				// Update existing rack
-				({ error } = await supabase
-					.from("drum_racks")
-					.update({
-						configuration,
-						updated_at: new Date().toISOString(),
-					})
-					.eq("id", currentRack.id));
+				await storage.updateDrumRack(currentRack.id, configuration);
 			} else {
 				// Create new rack
-				({ error } = await supabase.from("drum_racks").insert({
-					name: rackName.trim(),
-					configuration,
-				}));
+				await storage.addDrumRack(rackName.trim(), configuration);
 			}
 
-			if (error) throw error;
-
 			// Refresh drum racks list
-			const { data: updatedRacks } = await supabase
-				.from("drum_racks")
-				.select("*")
-				.order("created_at", { ascending: false });
+			const updatedRacks = await storage.getDrumRacks();
+			setDrumRacks(updatedRacks);
 
-			setDrumRacks(updatedRacks || []);
 			if (!currentRack) {
 				setIsSaveOpen(false);
 				setRackName("");
@@ -680,12 +527,30 @@ export function PianoKeys({
 
 			// Load samples
 			for (const key of rack.configuration.keys) {
-				if (key.sample?.url) {
+				if (key.sample?.filePath && key.sample?.directoryId) {
 					try {
-						const buffer = await Tone.Buffer.fromUrl(key.sample.url);
-						buffersRef.current[key.note] = buffer;
+						// Get the file from the file system
+						const file = await storage.getFile(
+							key.sample.filePath,
+							key.sample.directoryId,
+						);
+
+						const note = key.note;
+
+						const arrayBuffer = await file.arrayBuffer();
+
+						// Decode the audio data first
+						const audioContext = new AudioContext();
+						const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+						// Create Tone.js buffer from the decoded audio data
+						const buffer = new Tone.ToneAudioBuffer();
+						buffer.fromArray(audioBuffer.getChannelData(0));
+
+						// Create new player with the buffer
+						buffersRef.current[note] = buffer;
 						const player = new Tone.Player(buffer).toDestination();
-						playersRef.current[key.note] = player;
+						playersRef.current[note] = player;
 					} catch (error) {
 						console.error(`Failed to load sample for ${key.note}:`, error);
 					}
@@ -863,12 +728,29 @@ export function PianoKeys({
 							usedSamples.add(sample.file.name);
 
 							try {
-								// Load into Tone.js
-								const buffer = await Tone.Buffer.fromUrl(sample.file.url);
+								// Get the file from the file system
+								const file = await storage.getFile(
+									sample.file.filePath,
+									sample.file.directoryId,
+								);
+
 								const note = newKeys[keyIndex].note;
 
-								buffersRef.current[note] = buffer;
+								const arrayBuffer = await file.arrayBuffer();
+
+								// Decode the audio data first
+								const audioContext = new AudioContext();
+								const audioBuffer =
+									await audioContext.decodeAudioData(arrayBuffer);
+
+								// Create Tone.js buffer from the decoded audio data
+								const buffer = new Tone.ToneAudioBuffer();
+								buffer.fromArray(audioBuffer.getChannelData(0));
+
+								// Create new player with the buffer
 								const player = new Tone.Player(buffer).toDestination();
+
+								buffersRef.current[note] = buffer;
 								playersRef.current[note] = player;
 
 								// Update key state
@@ -930,6 +812,160 @@ export function PianoKeys({
 		[keys, categorizeSample],
 	);
 
+	const handleRandomRack = useCallback(async () => {
+		try {
+			// Clean up existing players and buffers
+			for (const player of Object.values(playersRef.current)) {
+				player.dispose();
+			}
+			for (const buffer of Object.values(buffersRef.current)) {
+				buffer.dispose();
+			}
+			playersRef.current = {};
+			buffersRef.current = {};
+
+			// Fetch all samples from all directories
+			const directories = await storage.getDirectories();
+			const allSamples: Sample[] = [];
+			for (const dir of directories) {
+				const dirSamples = await storage.getSamples(dir.id);
+				// Only include samples under 3 seconds
+				allSamples.push(
+					...dirSamples
+						.filter((s) => s.duration && s.duration < 3)
+						.map((s) => ({
+							...s,
+							duration: s.duration || 0,
+							channels: s.channels || 0,
+							sampleRate: s.sampleRate || 0,
+							rmsLevel: s.rmsLevel || 0,
+						})),
+				);
+			}
+
+			if (allSamples.length === 0) {
+				setError("No samples found");
+				return;
+			}
+
+			// Categorize samples
+			const samples = allSamples.map((sample) => ({
+				file: sample,
+				category: categorizeSample(sample.name),
+			}));
+
+			// Sort samples by category
+			const categorizedSamples = {
+				kick: samples.filter((s) => s.category === "kick"),
+				snare: samples.filter((s) => s.category === "snare"),
+				rim_clap: samples.filter((s) => s.category === "rim_clap"),
+				closed_hihat: samples.filter((s) => s.category === "closed_hihat"),
+				open_hihat: samples.filter((s) => s.category === "open_hihat"),
+				perc: samples.filter((s) => s.category === "perc"),
+				tom: samples.filter((s) => s.category === "tom"),
+				cymbal: samples.filter((s) => s.category === "cymbal"),
+				other: samples.filter((s) => s.category === "other"),
+			};
+
+			// Map samples to keys
+			const newKeys = [...keys];
+			const usedSamples = new Set<string>();
+
+			const assignSample = async (
+				keyIndex: number,
+				categories: string[],
+				fallbackCategory = "other",
+			) => {
+				const availableSamples = categories
+					.flatMap(
+						(cat) => categorizedSamples[cat as keyof typeof categorizedSamples],
+					)
+					.filter((s) => !usedSamples.has(s.file.name));
+
+				if (availableSamples.length > 0) {
+					const sample =
+						availableSamples[
+							Math.floor(Math.random() * availableSamples.length)
+						];
+					usedSamples.add(sample.file.name);
+
+					try {
+						// Get the file from the file system
+						const file = await storage.getFile(
+							sample.file.filePath,
+							sample.file.directoryId,
+						);
+
+						const note = newKeys[keyIndex].note;
+
+						const arrayBuffer = await file.arrayBuffer();
+
+						// Decode the audio data first
+						const audioContext = new AudioContext();
+						const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+						// Create Tone.js buffer from the decoded audio data
+						const buffer = new Tone.ToneAudioBuffer();
+						buffer.fromArray(audioBuffer.getChannelData(0));
+
+						// Create new player with the buffer
+						const player = new Tone.Player(buffer).toDestination();
+
+						buffersRef.current[note] = buffer;
+						playersRef.current[note] = player;
+
+						// Update key state
+						newKeys[keyIndex] = {
+							...newKeys[keyIndex],
+							sample: sample.file,
+						};
+					} catch (error) {
+						console.error(`Failed to load sample ${sample.file.name}:`, error);
+					}
+				} else if (fallbackCategory && categories[0] !== fallbackCategory) {
+					await assignSample(keyIndex, [fallbackCategory]);
+				}
+			};
+
+			// Assign samples based on the mapping
+			await Promise.all([
+				// Kicks
+				assignSample(0, ["kick"]), // F2
+				assignSample(1, ["kick"]), // F#2
+				// Snares
+				assignSample(2, ["snare"]), // G2
+				assignSample(3, ["snare"]), // G#2
+				// Rims/Claps
+				assignSample(4, ["rim_clap"]), // A2
+				assignSample(5, ["rim_clap"]), // A#2
+				// Closed hihats/shakers
+				assignSample(6, ["closed_hihat"]), // B2
+				assignSample(7, ["closed_hihat"]), // C3
+				assignSample(8, ["closed_hihat"]), // C#3
+				assignSample(9, ["closed_hihat"]), // D3
+				// Open hihat
+				assignSample(10, ["open_hihat"]), // D#3
+				// Perc
+				assignSample(11, ["perc"]), // E3
+				// Toms
+				...[12, 13, 14, 15, 16, 17].map((i) => assignSample(i, ["tom"])), // F3 to B3
+				// Cymbals
+				...[13, 14, 15, 16, 17].map((i) => assignSample(i, ["cymbal"])), // F#3 to A#3
+				// Random percs for the rest
+				...Array.from({ length: 6 }, (_, i) =>
+					assignSample(18 + i, ["perc", "other"]),
+				),
+			]);
+
+			setKeys(newKeys);
+			setCurrentRack(null);
+			setRackName("");
+		} catch (error) {
+			console.error("Error creating random rack:", error);
+			setError("Failed to create random rack");
+		}
+	}, [keys, categorizeSample]);
+
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
@@ -944,6 +980,15 @@ export function PianoKeys({
 					)}
 				</div>
 				<div className="flex items-center gap-2">
+					<Button
+						variant="ghost"
+						size="sm"
+						className="gap-2"
+						onClick={handleRandomRack}
+					>
+						<span>Random Rack</span>
+					</Button>
+
 					<Button
 						variant="ghost"
 						size="sm"
@@ -984,34 +1029,40 @@ export function PianoKeys({
 								<h4 className="font-medium">Load Drum Rack</h4>
 								<div className="max-h-[300px] overflow-auto space-y-2">
 									{drumRacks.map((rack) => (
-										<div key={rack.id} className="flex items-center gap-2">
-											<Button
-												variant="ghost"
-												className="flex-1 justify-start font-normal"
-												onClick={() => handleLoad(rack)}
+										<div
+											key={rack.id}
+											className="flex items-center justify-between p-2 hover:bg-accent rounded-md"
+										>
+											<button
+												type="button"
+												className="flex-1 text-left"
+												onClick={() => {
+													setCurrentRack(rack);
+													setRackName(rack.name);
+													setKeys(
+														INITIAL_KEYS.map((key) => {
+															const mappedKey = rack.configuration.keys.find(
+																(k) => k.note === key.note,
+															);
+															return mappedKey || key;
+														}),
+													);
+													setIsLoadOpen(false);
+												}}
 											>
 												{rack.name}
-											</Button>
+											</button>
 											<Button
 												variant="ghost"
 												size="sm"
 												className="h-8 w-8 p-0 text-destructive hover:text-destructive"
 												onClick={async () => {
 													try {
-														const { error } = await supabase
-															.from("drum_racks")
-															.delete()
-															.eq("id", rack.id);
-
-														if (error) throw error;
+														await storage.removeDrumRack(rack.id);
 
 														// Refresh drum racks list
-														const { data: updatedRacks } = await supabase
-															.from("drum_racks")
-															.select("*")
-															.order("created_at", { ascending: false });
-
-														setDrumRacks(updatedRacks || []);
+														const updatedRacks = await storage.getDrumRacks();
+														setDrumRacks(updatedRacks);
 
 														// If this was the current rack, clear it
 														if (currentRack?.id === rack.id) {

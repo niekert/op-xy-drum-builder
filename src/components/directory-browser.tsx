@@ -8,17 +8,17 @@ import {
 	useCallback,
 	Fragment,
 } from "react";
-import { ChevronRight, ChevronDown, Folder, Music } from "lucide-react";
+import { ChevronRight, ChevronDown, Folder, Music, Lock } from "lucide-react";
 import * as Tone from "tone";
-import type { Sample } from "./sample-list";
-import { useQueryClient } from "@tanstack/react-query";
+import { storage } from "@/lib/storage";
+import type { Sample } from "@/lib/storage";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { supabase } from "@/lib/supabase";
 
 type DirectoryBrowserProps = {
 	samples: Sample[];
@@ -59,11 +59,20 @@ export function DirectoryBrowser({
 		new Set(),
 	);
 	const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
+	const [requestingPermission, setRequestingPermission] = useState<Set<string>>(
+		new Set(),
+	);
 	const playerRef = useRef<Tone.Player | null>(null);
 	const nodesRef = useRef<Map<string, Node>>(new Map());
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [selectedPath, setSelectedPath] = useState<string>("/");
 	const queryClient = useQueryClient();
+
+	// Query for directory permissions
+	const { data: directories = [] } = useQuery({
+		queryKey: ["directories"],
+		queryFn: () => storage.getDirectories(),
+	});
 
 	// Clean up player on unmount
 	useEffect(() => {
@@ -77,7 +86,7 @@ export function DirectoryBrowser({
 	// Play sample when selection changes
 	useEffect(() => {
 		const playSample = async () => {
-			if (!selectedSample?.url) return;
+			if (!selectedSample?.filePath || !selectedSample?.directoryId) return;
 
 			try {
 				// Stop and dispose previous player
@@ -86,11 +95,24 @@ export function DirectoryBrowser({
 					playerRef.current.dispose();
 				}
 
-				// Create new player
-				const player = new Tone.Player(selectedSample.url).toDestination();
-				playerRef.current = player;
+				// Get the file from the file system
+				const file = await storage.getFile(
+					selectedSample.filePath,
+					selectedSample.directoryId,
+				);
+				const arrayBuffer = await file.arrayBuffer();
 
-				await player.load(selectedSample.url);
+				// Decode the audio data first
+				const audioContext = new AudioContext();
+				const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+				// Create Tone.js buffer from the decoded audio data
+				const buffer = new Tone.ToneAudioBuffer();
+				buffer.fromArray(audioBuffer.getChannelData(0));
+
+				// Create new player with the buffer
+				const player = new Tone.Player(buffer).toDestination();
+				playerRef.current = player;
 
 				// Make sure context is running
 				if (Tone.context.state !== "running") {
@@ -151,7 +173,8 @@ export function DirectoryBrowser({
 
 		// Add all samples to the tree
 		for (const sample of samples) {
-			const directory = sample.directory === "/" ? "" : sample.directory;
+			const directory =
+				sample.directoryPath === "/" ? "" : sample.directoryPath;
 			const parent = ensurePath(directory);
 			const node: SampleNode = {
 				type: "sample",
@@ -417,20 +440,8 @@ export function DirectoryBrowser({
 		try {
 			setDeletingItems((prev) => new Set(prev).add(sample.id));
 
-			// First, delete the file from storage
-			const { error: storageError } = await supabase.storage
-				.from("samples")
-				.remove([sample.storage_path]);
-
-			if (storageError) throw storageError;
-
-			// Then delete the database record
-			const { error: dbError } = await supabase
-				.from("samples")
-				.delete()
-				.eq("id", sample.id);
-
-			if (dbError) throw dbError;
+			// Delete the sample from IndexedDB
+			await storage.removeSample(sample.id);
 
 			// Clear selected sample if it was deleted
 			if (selectedSample?.id === sample.id) {
@@ -454,15 +465,15 @@ export function DirectoryBrowser({
 		try {
 			setDeletingItems((prev) => new Set(prev).add(path));
 
-			// Get all samples in this folder
-			const folderSamples = samples.filter((sample) =>
-				sample.directory.startsWith(path),
-			);
-
-			// Delete all samples in the folder
-			for (const sample of folderSamples) {
-				await handleDeleteSample(sample);
+			// Find the directory in our list
+			const directory = directories.find((d) => d.path === path);
+			if (!directory) {
+				console.error("Directory not found:", path);
+				return;
 			}
+
+			// Remove the directory and all its samples
+			await storage.removeDirectory(directory.id);
 
 			// Remove folder from expanded state
 			setExpandedFolders((prev) => {
@@ -470,12 +481,36 @@ export function DirectoryBrowser({
 				next.delete(path);
 				return next;
 			});
+
+			// Refresh the directories list
+			queryClient.invalidateQueries({ queryKey: ["directories"] });
+			queryClient.invalidateQueries({ queryKey: ["samples"] });
 		} catch (error) {
 			console.error("Error deleting folder:", error);
 		} finally {
 			setDeletingItems((prev) => {
 				const next = new Set(prev);
 				next.delete(path);
+				return next;
+			});
+		}
+	};
+
+	const handleRequestPermission = async (directoryId: string) => {
+		try {
+			setRequestingPermission((prev) => new Set(prev).add(directoryId));
+			const granted = await storage.requestDirectoryPermission(directoryId);
+			if (granted) {
+				// Refresh directories list
+				queryClient.invalidateQueries({ queryKey: ["directories"] });
+				queryClient.invalidateQueries({ queryKey: ["samples"] });
+			}
+		} catch (error) {
+			console.error("Error requesting permission:", error);
+		} finally {
+			setRequestingPermission((prev) => {
+				const next = new Set(prev);
+				next.delete(directoryId);
 				return next;
 			});
 		}
@@ -502,13 +537,17 @@ export function DirectoryBrowser({
 		}
 
 		const level = node.path.split("/").length - 1;
+		const directory = directories.find((d) => d.path === node.path);
+		const needsPermission = directory && !directory.hasPermission;
+		const isRequestingPermission =
+			directory && requestingPermission.has(directory.id);
 
 		if (node.type === "sample") {
 			return (
 				<ContextMenu key={node.sample.id}>
 					<ContextMenuTrigger>
 						<div
-							draggable
+							draggable={!needsPermission}
 							onDragStart={(e) => handleSampleDragStart(e, node.sample)}
 							onDragEnd={onDragEnd}
 							key={node.path}
@@ -517,13 +556,16 @@ export function DirectoryBrowser({
 								flex items-center gap-2 p-1 rounded-md outline-none
 								${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
 								${isSelected && !showHighlight ? "bg-muted/30" : ""}
+								${needsPermission ? "opacity-50 cursor-not-allowed" : ""}
 							`}
 							onClick={() => {
-								onSampleSelect(node.sample);
-								setSelectedPath("");
+								if (!needsPermission) {
+									onSampleSelect(node.sample);
+									setSelectedPath("");
+								}
 							}}
 							onKeyDown={(e) => {
-								if (e.key === "Enter" || e.key === " ") {
+								if (!needsPermission && (e.key === "Enter" || e.key === " ")) {
 									e.preventDefault();
 									onSampleSelect(node.sample);
 								}
@@ -584,29 +626,38 @@ export function DirectoryBrowser({
 				<ContextMenu>
 					<ContextMenuTrigger>
 						<div
-							draggable
+							draggable={!needsPermission}
 							onDragStart={(e) => handleFolderDragStart(e, node)}
 							onDragEnd={onDragEnd}
 							key={node.path}
 							style={{ marginLeft: `${level * 16}px` }}
 							className={`
-							flex flex-col gap-1
-							${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
-							${isSelected && !showHighlight ? "bg-muted/30" : ""}
-						`}
+								flex flex-col gap-1
+								${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
+								${isSelected && !showHighlight ? "bg-muted/30" : ""}
+								${needsPermission ? "opacity-50" : ""}
+							`}
 						>
 							<div
 								className="flex items-center gap-2 p-1 rounded-md outline-none"
 								onClick={() => {
-									setSelectedPath(node.path);
-									queryClient.setQueryData(["selectedSample"], null);
-									toggleFolder(node.path);
+									if (needsPermission && directory) {
+										handleRequestPermission(directory.id);
+									} else {
+										setSelectedPath(node.path);
+										queryClient.setQueryData(["selectedSample"], null);
+										toggleFolder(node.path);
+									}
 								}}
 								onKeyDown={(e) => {
 									if (e.key === "Enter" || e.key === " ") {
 										e.preventDefault();
-										setSelectedPath(node.path);
-										toggleFolder(node.path);
+										if (needsPermission && directory) {
+											handleRequestPermission(directory.id);
+										} else {
+											setSelectedPath(node.path);
+											toggleFolder(node.path);
+										}
 									}
 								}}
 								role="treeitem"
@@ -618,7 +669,9 @@ export function DirectoryBrowser({
 									type="button"
 									onClick={(e) => {
 										e.stopPropagation();
-										toggleFolder(node.path);
+										if (!needsPermission) {
+											toggleFolder(node.path);
+										}
 									}}
 									className="p-0.5 hover:bg-muted rounded"
 									aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
@@ -629,52 +682,126 @@ export function DirectoryBrowser({
 										<ChevronRight className="h-4 w-4 text-muted-foreground" />
 									)}
 								</button>
-								<div className="flex items-center gap-2 cursor-grab active:cursor-grabbing">
-									<Folder className="h-4 w-4 text-muted-foreground" />
+								<div className="flex items-center gap-2 cursor-pointer">
+									{needsPermission ? (
+										<Lock className="h-4 w-4 text-muted-foreground" />
+									) : (
+										<Folder className="h-4 w-4 text-muted-foreground" />
+									)}
 									<span className="text-sm">{node.name}</span>
+									{isRequestingPermission && (
+										<svg
+											className="animate-spin h-4 w-4 text-muted-foreground"
+											xmlns="http://www.w3.org/2000/svg"
+											fill="none"
+											viewBox="0 0 24 24"
+											aria-label="Requesting permission..."
+										>
+											<title>Requesting permission...</title>
+											<circle
+												className="opacity-25"
+												cx="12"
+												cy="12"
+												r="10"
+												stroke="currentColor"
+												strokeWidth="4"
+											/>
+											<path
+												className="opacity-75"
+												fill="currentColor"
+												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+											/>
+										</svg>
+									)}
 								</div>
 							</div>
 						</div>
 					</ContextMenuTrigger>
 					<ContextMenuContent>
-						<ContextMenuItem
-							className="text-destructive focus:text-destructive"
-							onSelect={() => handleDeleteFolder(node.path, samples)}
-							disabled={deletingItems.has(node.path)}
-						>
-							{deletingItems.has(node.path) ? (
-								<>
-									<span className="mr-2">Deleting...</span>
-									<svg
-										className="animate-spin h-4 w-4"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										aria-label="Loading..."
-									>
-										<title>Loading...</title>
-										<circle
-											className="opacity-25"
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											strokeWidth="4"
-										/>
-										<path
-											className="opacity-75"
-											fill="currentColor"
-											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-										/>
-									</svg>
-								</>
-							) : (
-								"Delete Folder"
-							)}
-						</ContextMenuItem>
+						{needsPermission && directory ? (
+							<>
+								<ContextMenuItem
+									onSelect={() => handleRequestPermission(directory.id)}
+									disabled={isRequestingPermission}
+								>
+									Request Permission
+								</ContextMenuItem>
+								<ContextMenuItem
+									className="text-destructive focus:text-destructive"
+									onSelect={() => handleDeleteFolder(node.path, samples)}
+									disabled={deletingItems.has(node.path)}
+								>
+									{deletingItems.has(node.path) ? (
+										<>
+											<span className="mr-2">Deleting...</span>
+											<svg
+												className="animate-spin h-4 w-4"
+												xmlns="http://www.w3.org/2000/svg"
+												fill="none"
+												viewBox="0 0 24 24"
+												aria-label="Deleting folder..."
+											>
+												<title>Deleting folder...</title>
+												<circle
+													className="opacity-25"
+													cx="12"
+													cy="12"
+													r="10"
+													stroke="currentColor"
+													strokeWidth="4"
+												/>
+												<path
+													className="opacity-75"
+													fill="currentColor"
+													d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+												/>
+											</svg>
+										</>
+									) : (
+										"Remove Directory"
+									)}
+								</ContextMenuItem>
+							</>
+						) : (
+							<ContextMenuItem
+								className="text-destructive focus:text-destructive"
+								onSelect={() => handleDeleteFolder(node.path, samples)}
+								disabled={deletingItems.has(node.path)}
+							>
+								{deletingItems.has(node.path) ? (
+									<>
+										<span className="mr-2">Deleting...</span>
+										<svg
+											className="animate-spin h-4 w-4"
+											xmlns="http://www.w3.org/2000/svg"
+											fill="none"
+											viewBox="0 0 24 24"
+											aria-label="Deleting folder..."
+										>
+											<title>Deleting folder...</title>
+											<circle
+												className="opacity-25"
+												cx="12"
+												cy="12"
+												r="10"
+												stroke="currentColor"
+												strokeWidth="4"
+											/>
+											<path
+												className="opacity-75"
+												fill="currentColor"
+												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+											/>
+										</svg>
+									</>
+								) : (
+									"Delete Folder"
+								)}
+							</ContextMenuItem>
+						)}
 					</ContextMenuContent>
 				</ContextMenu>
-				{isExpanded && (
+				{isExpanded && !needsPermission && (
 					<div className="space-y-1">
 						{node.children.map((child) => renderNode(child))}
 					</div>

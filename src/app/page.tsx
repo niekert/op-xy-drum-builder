@@ -47,7 +47,9 @@ export default function Home() {
 						<ol className="space-y-3 text-sm text-muted-foreground">
 							<li className="flex gap-2">
 								<span className="font-mono text-foreground">01.</span>
-								<span>upload your samples using the upload area</span>
+								<span>
+									select one or more directories where your samples are located
+								</span>
 							</li>
 							<li className="flex gap-2">
 								<span className="font-mono text-foreground">02.</span>
@@ -57,7 +59,7 @@ export default function Home() {
 								<span className="font-mono text-foreground">03.</span>
 								<span>
 									you can also drag an entire folder to automatically create a
-									drum rack
+									rack
 								</span>
 							</li>
 							<li className="flex gap-2">
@@ -142,6 +144,17 @@ export default function Home() {
 					</div>
 				</div>
 			</main>
+
+			{/* Footer */}
+			<footer className="border-t">
+				<div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
+					<div className="text-xs text-muted-foreground">
+						<a href="/terms" className="hover:text-foreground">
+							Terms of Service
+						</a>
+					</div>
+				</div>
+			</footer>
 		</div>
 	);
 }

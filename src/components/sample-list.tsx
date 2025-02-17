@@ -2,48 +2,26 @@
 
 import { useEffect, useState, startTransition } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase, getDeviceId } from "@/lib/supabase";
 import * as Tone from "tone";
 import { DirectoryBrowser } from "./directory-browser";
-
-export type Sample = {
-	id: string;
-	name: string;
-	url: string;
-	storage_path: string;
-	duration: number;
-	createdAt: string;
-	directory: string;
-	channels?: number;
-	sample_rate?: number;
-	rms_level?: number;
-};
+import { storage } from "@/lib/storage";
+import type { Sample } from "@/lib/storage";
 
 type WaveformData = {
 	peaks: number[];
 	duration: number;
 };
 
-async function fetchSamples() {
-	const { data, error } = await supabase
-		.from("samples")
-		.select("*")
-		.eq("device_id", getDeviceId())
-		.order("created_at", { ascending: false });
-
-	if (error) throw error;
-	return data || [];
-}
-
 type SampleListProps = {
-	onDragStart: (
-		type: "folder" | "sample",
-		data: Sample | { path: string; samples: Sample[] },
-	) => void;
+	onDragStart: (e: React.DragEvent<HTMLDivElement>, sample: Sample) => void;
 	onDragEnd: () => void;
 	selectedSample: Sample | null;
 	onSampleSelect: (sample: Sample | null) => void;
 };
+
+async function fetchSamples(directoryId: string) {
+	return storage.getSamples(directoryId);
+}
 
 export function SampleList({
 	onDragStart,
@@ -53,34 +31,32 @@ export function SampleList({
 }: SampleListProps) {
 	const queryClient = useQueryClient();
 	const [waveform, setWaveform] = useState<WaveformData | null>(null);
+	const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
+
+	// Query for directories
+	const { data: directories = [] } = useQuery({
+		queryKey: ["directories"],
+		queryFn: () => storage.getDirectories(),
+	});
 
 	// Query for samples
 	const { data: samples = [], isLoading } = useQuery({
-		queryKey: ["samples", getDeviceId()],
-		queryFn: fetchSamples,
+		queryKey: ["samples"],
+		queryFn: async () => {
+			const allSamples: Sample[] = [];
+			for (const dir of directories) {
+				const dirSamples = await storage.getSamples(dir.id);
+				allSamples.push(...dirSamples);
+			}
+			return allSamples;
+		},
+		enabled: directories.length > 0,
 	});
 
 	// Delete mutation
 	const deleteMutation = useMutation({
 		mutationFn: async (sample: Sample) => {
-			// First, delete the file from storage
-			const { error: storageError } = await supabase.storage
-				.from("samples")
-				.remove([sample.storage_path]);
-
-			if (storageError) {
-				throw storageError;
-			}
-
-			// Then delete the database record
-			const { error: dbError } = await supabase
-				.from("samples")
-				.delete()
-				.eq("id", sample.id);
-
-			if (dbError) {
-				throw dbError;
-			}
+			await storage.removeSample(sample.id);
 
 			// Clear selected sample if it was deleted
 			if (selectedSample?.id === sample.id) {
@@ -90,27 +66,30 @@ export function SampleList({
 		},
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["samples"] });
+			queryClient.invalidateQueries({ queryKey: ["directories"] });
 		},
 	});
 
-	const analyzeSample = async (sample: Sample) => {
+	const analyzeSample = async (sample: Sample | null) => {
+		if (!sample) return;
+
 		try {
 			// Start transition for UI updates
 			startTransition(() => {
 				onSampleSelect(sample);
 			});
 
-			// Ensure the URL is properly decoded for playback
-			const decodedUrl = decodeURIComponent(sample.url);
-			const buffer = await Tone.Buffer.fromUrl(decodedUrl);
-			const audioBuffer = buffer.get();
-			if (!audioBuffer) return;
+			// Get the file from the file system
+			const file = await storage.getFile(sample.filePath, sample.directoryId);
+			const buffer = await file.arrayBuffer();
+			const audioContext = new AudioContext();
+			const audioBuffer = await audioContext.decodeAudioData(buffer);
 
+			// Calculate peaks for waveform
 			const channelData = audioBuffer.getChannelData(0);
 			const peaks: number[] = [];
 			const blockSize = Math.floor(channelData.length / 100);
 
-			// Calculate peaks for waveform
 			for (let i = 0; i < 100; i++) {
 				const start = blockSize * i;
 				let peak = 0;
@@ -132,19 +111,12 @@ export function SampleList({
 			const rmsDb = 20 * Math.log10(rmsLevel);
 
 			// Update sample with audio details
-			const { error } = await supabase
-				.from("samples")
-				.update({
-					duration: audioBuffer.duration,
-					channels: audioBuffer.numberOfChannels,
-					sample_rate: audioBuffer.sampleRate,
-					rms_level: rmsDb,
-				})
-				.eq("id", sample.id);
-
-			if (error) {
-				console.error("Error updating sample details:", error);
-			}
+			await storage.updateSample(sample.id, {
+				duration: audioBuffer.duration,
+				channels: audioBuffer.numberOfChannels,
+				sampleRate: audioBuffer.sampleRate,
+				rmsLevel: rmsDb,
+			});
 
 			// Update the UI with the new details
 			startTransition(() => {
@@ -152,8 +124,8 @@ export function SampleList({
 					...sample,
 					duration: audioBuffer.duration,
 					channels: audioBuffer.numberOfChannels,
-					sample_rate: audioBuffer.sampleRate,
-					rms_level: rmsDb,
+					sampleRate: audioBuffer.sampleRate,
+					rmsLevel: rmsDb,
 				});
 				setWaveform({
 					peaks,
@@ -169,12 +141,8 @@ export function SampleList({
 		e: React.DragEvent<HTMLDivElement>,
 		sample: Sample,
 	) => {
-		// Ensure we pass the decoded URL for drag and drop
-		const sampleWithDecodedUrl = {
-			...sample,
-			url: decodeURI(sample.url),
-		};
-		e.dataTransfer.setData("text/plain", JSON.stringify(sampleWithDecodedUrl));
+		// Just pass the sample data directly
+		e.dataTransfer.setData("text/plain", JSON.stringify(sample));
 
 		// Create a custom drag preview
 		const dragPreview = document.createElement("div");
@@ -305,22 +273,22 @@ export function SampleList({
 								<div>
 									<span className="block font-mono">sample rate</span>
 									<span>
-										{selectedSample.sample_rate
-											? `${(selectedSample.sample_rate / 1000).toFixed(1)}kHz`
+										{selectedSample.sampleRate
+											? `${(selectedSample.sampleRate / 1000).toFixed(1)}kHz`
 											: "-"}
 									</span>
 								</div>
 								<div>
 									<span className="block font-mono">level</span>
 									<span>
-										{selectedSample.rms_level
-											? `${selectedSample.rms_level.toFixed(1)}dB`
+										{selectedSample.rmsLevel
+											? `${selectedSample.rmsLevel.toFixed(1)}dB`
 											: "-"}
 									</span>
 								</div>
 							</div>
 							<p className="text-xs text-muted-foreground">
-								Directory: {selectedSample.directory}
+								Directory: {selectedSample.directoryPath}
 							</p>
 						</div>
 						{waveform && (

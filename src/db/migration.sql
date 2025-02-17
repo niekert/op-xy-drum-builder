@@ -17,6 +17,16 @@ ADD COLUMN IF NOT EXISTS rms_level DOUBLE PRECISION;
 ALTER TABLE samples
 ADD COLUMN IF NOT EXISTS device_id TEXT NOT NULL DEFAULT '';
 
+-- Add file system columns to samples table
+ALTER TABLE samples
+ADD COLUMN IF NOT EXISTS file_path TEXT,
+ADD COLUMN IF NOT EXISTS directory_handle_id TEXT;
+DROP COLUMN URL
+
+
+-- Add index for faster directory lookups
+CREATE INDEX IF NOT EXISTS samples_directory_handle_id_idx ON samples(directory_handle_id);
+
 -- Create drum_racks table
 CREATE TABLE IF NOT EXISTS drum_racks (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
