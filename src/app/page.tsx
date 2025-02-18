@@ -92,7 +92,7 @@ export default function Home() {
 
 					{/* Guide Section */}
 					<div className="mt-8 max-w-1.5xl mx-auto text-left p-4 rounded-lg border bg-card max-w-fit">
-						<h3 className="font-mono text-sm mb-4">quick guide</h3>
+						<h3 className="font-mono text-sm mb-4">how to use</h3>
 						<ol className="space-y-3 text-sm text-muted-foreground">
 							<li className="flex gap-2">
 								<span className="font-mono text-foreground">01.</span>
@@ -148,6 +148,10 @@ export default function Home() {
 								</span>
 							</li>
 						</ol>
+
+						<p className="text-sm text-muted-foreground mt-4">
+							NOTE: all samples remain local and are not uploaded to any servers
+						</p>
 					</div>
 				</section>
 

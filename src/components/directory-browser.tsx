@@ -929,8 +929,8 @@ export function DirectoryBrowser({
 			<Fragment key={node.path}>
 				<ContextMenu>
 					<ContextMenuTrigger>
-						<div
-							role="treeitem"
+						<button
+							type="button"
 							draggable={!needsPermission}
 							onDragStart={(e) => handleFolderDragStart(e, node)}
 							onDragEnd={onDragEnd}
@@ -1005,7 +1005,7 @@ export function DirectoryBrowser({
 									/>
 								</svg>
 							)}
-						</div>
+						</button>
 					</ContextMenuTrigger>
 				</ContextMenu>
 				{isExpanded && !needsPermission && (
