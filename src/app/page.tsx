@@ -60,8 +60,11 @@ export default function Home() {
 		}
 
 		scrollTimeout.current = window.setTimeout(() => {
-			sampler.scrollToSample(sample.id);
-		}, 250);
+			const newSampler = directoryBrowserRef.current;
+			if (newSampler) {
+				newSampler.scrollToSample(sample.id);
+			}
+		}, 100);
 	}, []);
 
 	return (

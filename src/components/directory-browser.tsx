@@ -581,22 +581,26 @@ export function DirectoryBrowser({
 		}
 	}, []);
 
-	useImperativeHandle(ref, () => {
-		return {
-			scrollToSample(sampleId: string) {
-				const selectedIndex = visibleNodes.findIndex(
-					({ node }) => node.type === "sample" && node.sample.id === sampleId,
-				);
+	useImperativeHandle(
+		ref,
+		() => {
+			return {
+				scrollToSample(sampleId: string) {
+					const selectedIndex = visibleNodes.findIndex(
+						({ node }) => node.type === "sample" && node.sample.id === sampleId,
+					);
 
-				if (selectedIndex !== -1) {
-					virtualizer.scrollToIndex(selectedIndex, {
-						align: "center",
-					});
-				}
-			},
-			playSample,
-		};
-	});
+					if (selectedIndex !== -1) {
+						virtualizer.scrollToIndex(selectedIndex, {
+							align: "center",
+						});
+					}
+				},
+				playSample,
+			};
+		},
+		[visibleNodes, virtualizer, playSample],
+	);
 
 	// Add global keyboard handler
 	useEffect(() => {
