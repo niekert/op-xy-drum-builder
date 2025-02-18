@@ -14,8 +14,6 @@ type ProcessStatus = {
 	processed?: number;
 };
 
-const ALLOWED_EXTENSIONS = [".wav", ".aif", ".aiff", ".mp3"];
-
 export function Dropzone() {
 	const queryClient = useQueryClient();
 	const [error, setError] = useState<string | null>(null);
@@ -87,7 +85,7 @@ export function Dropzone() {
 						) : (
 							<>
 								<p className="text-xs text-muted-foreground">
-									WAV, AIF/AIFF, or MP3 files
+									Only supports .wav files
 								</p>
 							</>
 						)}

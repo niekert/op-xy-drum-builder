@@ -344,7 +344,8 @@ export function PianoKeys({
 		const drumbuilderFolder = zip.folder("drumbuilder");
 		if (!drumbuilderFolder) return;
 
-		const presetFolder = drumbuilderFolder.folder(`${presetName}.preset`);
+		const finalPresetName = currentRack?.name || presetName;
+		const presetFolder = drumbuilderFolder.folder(`${finalPresetName}.preset`);
 		if (!presetFolder) return;
 
 		// Get all mapped samples

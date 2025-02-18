@@ -489,7 +489,7 @@ class StorageService {
 		for await (const entry of handle.values()) {
 			if (entry.kind === "file") {
 				// Check if file has an allowed audio extension
-				if (entry.name.match(/\.(wav|mp3|aiff?|m4a)$/i)) {
+				if (entry.name.match(/\.(wav)$/i)) {
 					try {
 						const file = await entry.getFile();
 						if (await this.isLikelyDrumOneShot(file)) {
