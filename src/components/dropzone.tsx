@@ -85,7 +85,9 @@ export function Dropzone() {
 						) : (
 							<>
 								<p className="text-xs text-muted-foreground">
-									Only supports .wav files
+									drumbuilder will scan for one-shot .wav files in the selected{" "}
+									<br />
+									directory and subdirectories
 								</p>
 							</>
 						)}

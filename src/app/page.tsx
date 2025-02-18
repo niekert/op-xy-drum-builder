@@ -150,7 +150,16 @@ export default function Home() {
 						</ol>
 
 						<p className="text-sm text-muted-foreground mt-4">
-							NOTE: all samples remain local and are not uploaded to any servers
+							NOTE: all samples remain local and are not uploaded to any
+							servers. The code is{" "}
+							<a
+								className="text-foreground hover:underline"
+								href="https://github.com/niekert/op-xy-drum-builder"
+								target="_blank"
+								rel="noreferrer"
+							>
+								open source
+							</a>
 						</p>
 					</div>
 				</section>
