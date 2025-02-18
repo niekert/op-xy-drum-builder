@@ -99,7 +99,7 @@ type DragItem = {
 type PianoKeysProps = {
 	dragItem: DragItem;
 	selectedSample: Sample | null;
-	onSampleSelect: (sample: Sample | null) => void;
+	onSampleSelect: (sample: Sample) => void;
 };
 
 export function PianoKeys({

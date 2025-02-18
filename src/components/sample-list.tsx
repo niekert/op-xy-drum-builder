@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, startTransition } from "react";
+import { useCallback, startTransition, RefObject } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Tone from "tone";
-import { DirectoryBrowser } from "./directory-browser";
+import { DirectoryBrowser, DirectoryBrowserRef } from "./directory-browser";
 import { storage } from "@/lib/storage";
 import type { Sample } from "@/lib/storage";
 
@@ -20,6 +20,7 @@ type SampleListProps = {
 	onDragEnd: () => void;
 	selectedSample: Sample | null;
 	onSampleSelect: (sample: Sample | null) => void;
+	ref: RefObject<DirectoryBrowserRef | null>;
 };
 
 export function SampleList({
@@ -27,6 +28,7 @@ export function SampleList({
 	onDragEnd,
 	selectedSample,
 	onSampleSelect,
+	ref,
 }: SampleListProps) {
 	const queryClient = useQueryClient();
 
@@ -203,6 +205,7 @@ export function SampleList({
 					selectedSample={selectedSample}
 					onDragStart={onDragStart}
 					onDragEnd={onDragEnd}
+					ref={ref}
 				/>
 			</div>
 

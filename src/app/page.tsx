@@ -3,8 +3,9 @@
 import { Dropzone } from "@/components/dropzone";
 import { SampleList } from "@/components/sample-list";
 import { PianoKeys } from "@/components/piano-keys";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Sample } from "@/lib/storage";
+import { DirectoryBrowserRef } from "@/components/directory-browser";
 
 type DragItem = {
 	type: "folder" | "sample";
@@ -14,6 +15,8 @@ type DragItem = {
 export default function Home() {
 	const [dragItem, setDragItem] = useState<DragItem | null>(null);
 	const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+	const directoryBrowserRef = useRef<DirectoryBrowserRef>(null);
+	const scrollTimeout = useRef<number | null>(null);
 
 	const handleDragStart = useCallback(
 		(type: DragItem["type"], data: DragItem["data"]) => {
@@ -28,6 +31,20 @@ export default function Home() {
 
 	const handleDragEnd = useCallback(() => {
 		setDragItem(null);
+	}, []);
+
+	const handleSelectSampleFromKey = useCallback((sample: Sample) => {
+		setSelectedSample(sample);
+
+		if (scrollTimeout.current) {
+			clearTimeout(scrollTimeout.current);
+			scrollTimeout.current = null;
+		}
+
+		scrollTimeout.current = window.setTimeout(() => {
+			if (!directoryBrowserRef.current) return;
+			directoryBrowserRef.current.scrollToSample(sample.id);
+		}, 50);
 	}, []);
 
 	return (
@@ -163,6 +180,7 @@ export default function Home() {
 								onDragEnd={handleDragEnd}
 								selectedSample={selectedSample}
 								onSampleSelect={onSampleSelect}
+								ref={directoryBrowserRef}
 							/>
 						</div>
 					</div>
@@ -176,7 +194,7 @@ export default function Home() {
 							<PianoKeys
 								dragItem={dragItem}
 								selectedSample={selectedSample}
-								onSampleSelect={setSelectedSample}
+								onSampleSelect={handleSelectSampleFromKey}
 							/>
 						</div>
 					</div>

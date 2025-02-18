@@ -8,6 +8,9 @@ import {
 	useCallback,
 	Fragment,
 	memo,
+	RefObject,
+	useImperativeHandle,
+	Ref,
 } from "react";
 import { ChevronRight, ChevronDown, Folder, Music, Lock } from "lucide-react";
 import * as Tone from "tone";
@@ -20,6 +23,12 @@ import {
 	ContextMenuItem,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import type { VirtualItem } from "@tanstack/react-virtual";
+
+export type DirectoryBrowserRef = {
+	scrollToSample: (sampleId: string) => void;
+};
 
 type DirectoryBrowserProps = {
 	samples: Sample[];
@@ -30,6 +39,7 @@ type DirectoryBrowserProps = {
 		data: Sample | { path: string; samples: Sample[] },
 	) => void;
 	onDragEnd: () => void;
+	ref: RefObject<DirectoryBrowserRef | null>;
 };
 
 type FolderNode = {
@@ -88,7 +98,7 @@ const SampleRow = memo(function SampleRow({
 					key={path}
 					style={{ marginLeft: `${level * 16}px` }}
 					className={`
-						flex items-center gap-2 p-1 rounded-md outline-none
+						flex items-center gap-2 p-1 rounded-md outline-none min-w-0
 						${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
 						${isSelected && !showHighlight ? "bg-muted/30" : ""}
 						${needsPermission ? "opacity-50 cursor-not-allowed" : ""}
@@ -106,7 +116,7 @@ const SampleRow = memo(function SampleRow({
 				>
 					<div className="w-4 flex-shrink-0" />
 					<Music className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-					<span className="text-sm truncate">{sample.name}</span>
+					<span className="text-sm truncate min-w-0 flex-1">{sample.name}</span>
 				</div>
 			</ContextMenuTrigger>
 			<ContextMenuContent>
@@ -156,6 +166,7 @@ export function DirectoryBrowser({
 	selectedSample,
 	onDragStart,
 	onDragEnd,
+	ref,
 }: DirectoryBrowserProps) {
 	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
 		new Set(),
@@ -401,6 +412,57 @@ export function DirectoryBrowser({
 		addVisibleNodes(tree);
 		return visibleNodes;
 	}, [expandedFolders, tree]);
+
+	// Get flattened list of visible nodes for virtualization
+	const visibleNodes = useMemo(() => {
+		const nodes: { node: Node; level: number }[] = [];
+
+		const addNode = (node: Node, level: number) => {
+			// Skip root node
+			if (node.path === "/" && node.type === "folder") {
+				for (const child of node.children) {
+					addNode(child, level);
+				}
+				return;
+			}
+
+			nodes.push({ node, level });
+
+			// Add children if it's an expanded folder
+			if (node.type === "folder" && expandedFolders.has(node.path)) {
+				for (const child of node.children) {
+					addNode(child, level + 1);
+				}
+			}
+		};
+
+		addNode(tree, 0);
+		return nodes;
+	}, [tree, expandedFolders]);
+
+	// Setup virtualizer
+	const virtualizer = useVirtualizer({
+		count: visibleNodes.length,
+		getScrollElement: () => containerRef.current,
+		estimateSize: () => 32, // Estimated height of each row
+		overscan: 5, // Number of items to render outside of the visible area
+	});
+
+	useImperativeHandle(ref, () => {
+		return {
+			scrollToSample(sampleId: string) {
+				const selectedIndex = visibleNodes.findIndex(
+					({ node }) => node.type === "sample" && node.sample.id === sampleId,
+				);
+
+				if (selectedIndex !== -1) {
+					virtualizer.scrollToIndex(selectedIndex, {
+						align: "center",
+					});
+				}
+			},
+		};
+	});
 
 	// Add global keyboard handler
 	useEffect(() => {
@@ -732,180 +794,83 @@ export function DirectoryBrowser({
 				<ContextMenu>
 					<ContextMenuTrigger>
 						<div
+							role="treeitem"
 							draggable={!needsPermission}
 							onDragStart={(e) => handleFolderDragStart(e, node)}
 							onDragEnd={onDragEnd}
-							key={node.path}
 							style={{ marginLeft: `${level * 16}px` }}
 							className={`
-								flex flex-col gap-1
-								${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
-								${isSelected && !showHighlight ? "bg-muted/30" : ""}
+								flex items-center gap-2 p-1 rounded-md outline-none w-full text-left min-w-0
+								${isSelected ? "bg-muted/30" : "hover:bg-muted/50"}
 								${needsPermission ? "opacity-50" : ""}
 							`}
-						>
-							<div
-								className="flex items-center gap-2 p-1 rounded-md outline-none"
-								onClick={() => {
+							onClick={() => {
+								if (needsPermission && directory) {
+									handleRequestPermission(directory.id);
+								} else {
+									setSelectedPath(node.path);
+									queryClient.setQueryData(["selectedSample"], null);
+									toggleFolder(node.path);
+								}
+							}}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									e.preventDefault();
 									if (needsPermission && directory) {
 										handleRequestPermission(directory.id);
 									} else {
 										setSelectedPath(node.path);
-										queryClient.setQueryData(["selectedSample"], null);
 										toggleFolder(node.path);
 									}
-								}}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" || e.key === " ") {
-										e.preventDefault();
-										if (needsPermission && directory) {
-											handleRequestPermission(directory.id);
-										} else {
-											setSelectedPath(node.path);
-											toggleFolder(node.path);
-										}
-									}
-								}}
-								role="treeitem"
-								tabIndex={isSelected ? 0 : -1}
-								aria-selected={isSelected}
-								aria-expanded={isExpanded}
+								}
+							}}
+							aria-expanded={isExpanded}
+							aria-disabled={needsPermission}
+						>
+							<div
+								className="p-0.5 hover:bg-muted rounded flex-shrink-0"
+								aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
 							>
-								<button
-									type="button"
-									onClick={(e) => {
-										e.stopPropagation();
-										if (!needsPermission) {
-											toggleFolder(node.path);
-										}
-									}}
-									className="p-0.5 hover:bg-muted rounded"
-									aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
-								>
-									{isExpanded ? (
-										<ChevronDown className="h-4 w-4 text-muted-foreground" />
-									) : (
-										<ChevronRight className="h-4 w-4 text-muted-foreground" />
-									)}
-								</button>
-								<div className="flex items-center gap-2 cursor-pointer">
-									{needsPermission ? (
-										<Lock className="h-4 w-4 text-muted-foreground" />
-									) : (
-										<Folder className="h-4 w-4 text-muted-foreground" />
-									)}
-									<span className="text-sm">{node.name}</span>
-									{isRequestingPermission && (
-										<svg
-											className="animate-spin h-4 w-4 text-muted-foreground"
-											xmlns="http://www.w3.org/2000/svg"
-											fill="none"
-											viewBox="0 0 24 24"
-											aria-label="Requesting permission..."
-										>
-											<title>Requesting permission...</title>
-											<circle
-												className="opacity-25"
-												cx="12"
-												cy="12"
-												r="10"
-												stroke="currentColor"
-												strokeWidth="4"
-											/>
-											<path
-												className="opacity-75"
-												fill="currentColor"
-												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-											/>
-										</svg>
-									)}
-								</div>
+								{isExpanded ? (
+									<ChevronDown className="h-4 w-4 text-muted-foreground" />
+								) : (
+									<ChevronRight className="h-4 w-4 text-muted-foreground" />
+								)}
 							</div>
+							{needsPermission ? (
+								<Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+							) : (
+								<Folder className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+							)}
+							<span className="text-sm truncate min-w-0 flex-1">
+								{node.name}
+							</span>
+							{isRequestingPermission && (
+								<svg
+									className="animate-spin h-4 w-4 text-muted-foreground flex-shrink-0"
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 24 24"
+									aria-label="Requesting permission..."
+								>
+									<title>Requesting permission...</title>
+									<circle
+										className="opacity-25"
+										cx="12"
+										cy="12"
+										r="10"
+										stroke="currentColor"
+										strokeWidth="4"
+									/>
+									<path
+										className="opacity-75"
+										fill="currentColor"
+										d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+									/>
+								</svg>
+							)}
 						</div>
 					</ContextMenuTrigger>
-					<ContextMenuContent>
-						{needsPermission && directory ? (
-							<>
-								<ContextMenuItem
-									onSelect={() => handleRequestPermission(directory.id)}
-									disabled={isRequestingPermission}
-								>
-									Request Permission
-								</ContextMenuItem>
-								<ContextMenuItem
-									className="text-destructive focus:text-destructive"
-									onSelect={() => handleDeleteFolder(node.path, samples)}
-									disabled={deletingItems.has(node.path)}
-								>
-									{deletingItems.has(node.path) ? (
-										<>
-											<span className="mr-2">Deleting...</span>
-											<svg
-												className="animate-spin h-4 w-4"
-												xmlns="http://www.w3.org/2000/svg"
-												fill="none"
-												viewBox="0 0 24 24"
-												aria-label="Deleting folder..."
-											>
-												<title>Deleting folder...</title>
-												<circle
-													className="opacity-25"
-													cx="12"
-													cy="12"
-													r="10"
-													stroke="currentColor"
-													strokeWidth="4"
-												/>
-												<path
-													className="opacity-75"
-													fill="currentColor"
-													d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-												/>
-											</svg>
-										</>
-									) : (
-										"Remove Directory"
-									)}
-								</ContextMenuItem>
-							</>
-						) : (
-							<ContextMenuItem
-								className="text-destructive focus:text-destructive"
-								onSelect={() => handleDeleteFolder(node.path, samples)}
-								disabled={deletingItems.has(node.path)}
-							>
-								{deletingItems.has(node.path) ? (
-									<>
-										<span className="mr-2">Deleting...</span>
-										<svg
-											className="animate-spin h-4 w-4"
-											xmlns="http://www.w3.org/2000/svg"
-											fill="none"
-											viewBox="0 0 24 24"
-											aria-label="Deleting folder..."
-										>
-											<title>Deleting folder...</title>
-											<circle
-												className="opacity-25"
-												cx="12"
-												cy="12"
-												r="10"
-												stroke="currentColor"
-												strokeWidth="4"
-											/>
-											<path
-												className="opacity-75"
-												fill="currentColor"
-												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-											/>
-										</svg>
-									</>
-								) : (
-									"Delete Folder"
-								)}
-							</ContextMenuItem>
-						)}
-					</ContextMenuContent>
 				</ContextMenu>
 				{isExpanded && !needsPermission && (
 					<div className="space-y-1">
@@ -934,11 +899,177 @@ export function DirectoryBrowser({
 	return (
 		<div
 			ref={containerRef}
-			className="p-2 focus:outline-none"
+			className="h-full overflow-auto focus:outline-none"
 			role="tree"
 			aria-label="Sample browser"
 		>
-			{renderNode(tree)}
+			<div
+				style={{
+					height: `${virtualizer.getTotalSize()}px`,
+					width: "100%",
+					position: "relative",
+				}}
+			>
+				{virtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
+					const { node, level } = visibleNodes[virtualRow.index];
+					const isSelected =
+						node.type === "sample"
+							? node.sample?.id === selectedSample?.id
+							: node.path === selectedPath;
+					const showHighlight = node.type === "sample" && isSelected;
+					const directory = directories.find((d) => d.path === node.path);
+					const needsPermission = directory && !directory.hasPermission;
+
+					return (
+						<div
+							key={virtualRow.key}
+							data-index={virtualRow.index}
+							ref={isSelected ? selectedSampleRef : null}
+							style={{
+								position: "absolute",
+								top: 0,
+								left: 0,
+								width: "100%",
+								height: `${virtualRow.size}px`,
+								transform: `translateY(${virtualRow.start}px)`,
+							}}
+						>
+							{node.type === "sample" ? (
+								<SampleRow
+									sample={node.sample}
+									path={node.path}
+									level={level}
+									isSelected={isSelected}
+									showHighlight={showHighlight}
+									needsPermission={!!needsPermission}
+									onSelect={handleSampleSelect}
+									onDragStart={handleSampleDragStart}
+									onDragEnd={onDragEnd}
+									selectedSampleRef={selectedSampleRef}
+									onDelete={handleDeleteSample}
+									isDeleting={deletingItems.has(node.sample.id)}
+								/>
+							) : (
+								<FolderRow
+									node={node}
+									path={node.path}
+									level={level}
+									isSelected={isSelected}
+									isExpanded={expandedFolders.has(node.path)}
+									needsPermission={!!needsPermission}
+									isRequestingPermission={requestingPermission.has(
+										directory?.id || "",
+									)}
+									onToggle={() => {
+										if (needsPermission && directory) {
+											handleRequestPermission(directory.id);
+										} else {
+											setSelectedPath(node.path);
+											queryClient.setQueryData(["selectedSample"], null);
+											toggleFolder(node.path);
+										}
+									}}
+									onDragStart={handleFolderDragStart}
+									onDragEnd={onDragEnd}
+								/>
+							)}
+						</div>
+					);
+				})}
+			</div>
 		</div>
 	);
 }
+// Add a new FolderRow component for consistency
+const FolderRow = memo(function FolderRow({
+	node,
+	path,
+	level,
+	isSelected,
+	isExpanded,
+	needsPermission,
+	isRequestingPermission,
+	onToggle,
+	onDragStart,
+	onDragEnd,
+}: {
+	node: FolderNode;
+	path: string;
+	level: number;
+	isSelected: boolean;
+	isExpanded: boolean;
+	needsPermission: boolean;
+	isRequestingPermission: boolean;
+	onToggle: () => void;
+	onDragStart: (e: React.DragEvent, node: Node) => void;
+	onDragEnd: () => void;
+}) {
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger>
+				<div
+					role="treeitem"
+					draggable={!needsPermission}
+					onDragStart={(e) => onDragStart(e, node)}
+					onDragEnd={onDragEnd}
+					style={{ marginLeft: `${level * 16}px` }}
+					className={`
+						flex items-center gap-2 p-1 rounded-md outline-none w-full text-left min-w-0
+						${isSelected ? "bg-muted/30" : "hover:bg-muted/50"}
+						${needsPermission ? "opacity-50" : ""}
+					`}
+					onClick={onToggle}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							onToggle();
+						}
+					}}
+					aria-expanded={isExpanded}
+					aria-disabled={needsPermission}
+				>
+					<div
+						className="p-0.5 hover:bg-muted rounded flex-shrink-0"
+						aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name} folder`}
+					>
+						{isExpanded ? (
+							<ChevronDown className="h-4 w-4 text-muted-foreground" />
+						) : (
+							<ChevronRight className="h-4 w-4 text-muted-foreground" />
+						)}
+					</div>
+					{needsPermission ? (
+						<Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+					) : (
+						<Folder className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+					)}
+					<span className="text-sm truncate min-w-0 flex-1">{node.name}</span>
+					{isRequestingPermission && (
+						<svg
+							className="animate-spin h-4 w-4 text-muted-foreground flex-shrink-0"
+							xmlns="http://www.w3.org/2000/svg"
+							fill="none"
+							viewBox="0 0 24 24"
+							aria-label="Requesting permission..."
+						>
+							<title>Requesting permission...</title>
+							<circle
+								className="opacity-25"
+								cx="12"
+								cy="12"
+								r="10"
+								stroke="currentColor"
+								strokeWidth="4"
+							/>
+							<path
+								className="opacity-75"
+								fill="currentColor"
+								d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+							/>
+						</svg>
+					)}
+				</div>
+			</ContextMenuTrigger>
+		</ContextMenu>
+	);
+});
