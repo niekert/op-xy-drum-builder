@@ -3,17 +3,32 @@
 import { Dropzone } from "@/components/dropzone";
 import { SampleList } from "@/components/sample-list";
 import { PianoKeys } from "@/components/piano-keys";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { Sample } from "@/lib/storage";
 
 type DragItem = {
 	type: "folder" | "sample";
 	data: Sample | { path: string; samples: Sample[] };
-} | null;
+};
 
 export default function Home() {
-	const [dragItem, setDragItem] = useState<DragItem>(null);
+	const [dragItem, setDragItem] = useState<DragItem | null>(null);
 	const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+
+	const handleDragStart = useCallback(
+		(type: DragItem["type"], data: DragItem["data"]) => {
+			setDragItem({ type, data });
+		},
+		[],
+	);
+
+	const onSampleSelect = useCallback((sample: Sample | null) => {
+		setSelectedSample(sample);
+	}, []);
+
+	const handleDragEnd = useCallback(() => {
+		setDragItem(null);
+	}, []);
 
 	return (
 		<div className="min-h-screen bg-background">
@@ -144,12 +159,10 @@ export default function Home() {
 						</span>
 						<div className="h-[400px] border-t border-l border-r">
 							<SampleList
-								onDragStart={(type, data) =>
-									setDragItem({ type: type as any, data })
-								}
-								onDragEnd={() => setDragItem(null)}
+								onDragStart={handleDragStart}
+								onDragEnd={handleDragEnd}
 								selectedSample={selectedSample}
-								onSampleSelect={setSelectedSample}
+								onSampleSelect={onSampleSelect}
 							/>
 						</div>
 					</div>

@@ -7,6 +7,7 @@ import {
 	useEffect,
 	useCallback,
 	Fragment,
+	memo,
 } from "react";
 import { ChevronRight, ChevronDown, Folder, Music, Lock } from "lucide-react";
 import * as Tone from "tone";
@@ -48,6 +49,107 @@ type SampleNode = {
 
 type Node = FolderNode | SampleNode;
 
+// Add the SampleRow component before the DirectoryBrowser component
+const SampleRow = memo(function SampleRow({
+	sample,
+	path,
+	level,
+	isSelected,
+	showHighlight,
+	needsPermission,
+	onSelect,
+	onDragStart,
+	onDragEnd,
+	selectedSampleRef,
+	onDelete,
+	isDeleting,
+}: {
+	sample: Sample;
+	path: string;
+	level: number;
+	isSelected: boolean;
+	showHighlight: boolean;
+	needsPermission: boolean;
+	onSelect: (sample: Sample) => void;
+	onDragStart: (e: React.DragEvent, sample: Sample) => void;
+	onDragEnd: () => void;
+	selectedSampleRef: React.RefObject<HTMLDivElement | null>;
+	onDelete: (sample: Sample) => void;
+	isDeleting: boolean;
+}) {
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger>
+				<div
+					ref={isSelected ? selectedSampleRef : null}
+					draggable={!needsPermission}
+					onDragStart={(e) => onDragStart(e, sample)}
+					onDragEnd={onDragEnd}
+					key={path}
+					style={{ marginLeft: `${level * 16}px` }}
+					className={`
+						flex items-center gap-2 p-1 rounded-md outline-none
+						${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
+						${isSelected && !showHighlight ? "bg-muted/30" : ""}
+						${needsPermission ? "opacity-50 cursor-not-allowed" : ""}
+					`}
+					onClick={() => onSelect(sample)}
+					onKeyDown={(e) => {
+						if (!needsPermission && (e.key === "Enter" || e.key === " ")) {
+							e.preventDefault();
+							onSelect(sample);
+						}
+					}}
+					role="treeitem"
+					tabIndex={isSelected ? 0 : -1}
+					aria-selected={isSelected}
+				>
+					<div className="w-4 flex-shrink-0" />
+					<Music className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+					<span className="text-sm truncate">{sample.name}</span>
+				</div>
+			</ContextMenuTrigger>
+			<ContextMenuContent>
+				<ContextMenuItem
+					className="text-destructive focus:text-destructive"
+					onSelect={() => onDelete(sample)}
+					disabled={isDeleting}
+				>
+					{isDeleting ? (
+						<>
+							<span className="mr-2">Deleting...</span>
+							<svg
+								className="animate-spin h-4 w-4"
+								xmlns="http://www.w3.org/2000/svg"
+								fill="none"
+								viewBox="0 0 24 24"
+								aria-label="Loading..."
+							>
+								<title>Loading...</title>
+								<circle
+									className="opacity-25"
+									cx="12"
+									cy="12"
+									r="10"
+									stroke="currentColor"
+									strokeWidth="4"
+								/>
+								<path
+									className="opacity-75"
+									fill="currentColor"
+									d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+								/>
+							</svg>
+						</>
+					) : (
+						"Delete Sample"
+					)}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
+	);
+});
+
 export function DirectoryBrowser({
 	samples,
 	onSampleSelect,
@@ -68,6 +170,11 @@ export function DirectoryBrowser({
 	const [selectedPath, setSelectedPath] = useState<string>("/");
 	const queryClient = useQueryClient();
 
+	// Add a ref to track the selected sample element
+	const selectedSampleRef = useRef<HTMLDivElement>(null);
+	// Add ref to track if sample was selected via direct click
+	const wasClickedRef = useRef(false);
+
 	// Query for directory permissions
 	const { data: directories = [] } = useQuery({
 		queryKey: ["directories"],
@@ -83,10 +190,15 @@ export function DirectoryBrowser({
 		};
 	}, []);
 
-	// Play sample when selection changes
+	// Modify the play sample effect to only play on direct clicks
 	useEffect(() => {
 		const playSample = async () => {
-			if (!selectedSample?.filePath || !selectedSample?.directoryId) return;
+			if (
+				!selectedSample?.filePath ||
+				!selectedSample?.directoryId ||
+				!wasClickedRef.current
+			)
+				return;
 
 			try {
 				// Stop and dispose previous player
@@ -123,10 +235,52 @@ export function DirectoryBrowser({
 				player.start();
 			} catch (error) {
 				console.error("Error playing sample:", error);
+			} finally {
+				// Reset the click flag after playing
+				wasClickedRef.current = false;
 			}
 		};
 
 		playSample();
+	}, [selectedSample]);
+
+	// Effect to handle expanding folders and scrolling when a sample is selected
+	useEffect(() => {
+		if (selectedSample) {
+			// Find the sample's path in the tree
+			const sampleNode = Array.from(nodesRef.current.values()).find(
+				(n) => n.type === "sample" && n.sample.id === selectedSample.id,
+			);
+
+			if (sampleNode) {
+				// Get all parent folders
+				const pathParts = sampleNode.path.split("/").filter(Boolean);
+				const parentPaths = pathParts.reduce<string[]>((paths, part, index) => {
+					const path = index === 0 ? part : `${paths[index - 1]}/${part}`;
+					paths.push(path);
+					return paths;
+				}, []);
+
+				// Expand all parent folders
+				setExpandedFolders((prev) => {
+					const next = new Set(prev);
+					for (const path of parentPaths) {
+						next.add(path);
+					}
+					return next;
+				});
+
+				// Wait for the DOM to update after expanding folders
+				setTimeout(() => {
+					if (selectedSampleRef.current && containerRef.current) {
+						selectedSampleRef.current.scrollIntoView({
+							behavior: "smooth",
+							block: "nearest",
+						});
+					}
+				}, 100);
+			}
+		}
 	}, [selectedSample]);
 
 	// Build tree structure from flat samples array
@@ -386,25 +540,36 @@ export function DirectoryBrowser({
 		queryClient,
 	]);
 
-	const handleSampleDragStart = (e: React.DragEvent, sample: Sample) => {
-		e.stopPropagation();
-		onDragStart("sample", sample);
-		e.dataTransfer.setData("application/json", JSON.stringify(sample));
+	const handleSampleSelect = useCallback(
+		(sample: Sample) => {
+			onSampleSelect(sample);
+			setSelectedPath("");
+		},
+		[onSampleSelect],
+	);
 
-		// Create drag preview
-		const dragPreview = document.createElement("div");
-		dragPreview.className =
-			"fixed left-0 top-0 bg-background border rounded-md p-2 pointer-events-none flex items-center gap-2 text-xs";
-		dragPreview.innerHTML = `
+	const handleSampleDragStart = useCallback(
+		(e: React.DragEvent, sample: Sample) => {
+			e.stopPropagation();
+			onDragStart("sample", sample);
+			e.dataTransfer.setData("application/json", JSON.stringify(sample));
+
+			// Create drag preview
+			const dragPreview = document.createElement("div");
+			dragPreview.className =
+				"fixed left-0 top-0 bg-background border rounded-md p-2 pointer-events-none flex items-center gap-2 text-xs";
+			dragPreview.innerHTML = `
 			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 				<path d="M12 2v20M2 12h20" />
 			</svg>
 			<span class="font-mono">audio</span>
 		`;
-		document.body.appendChild(dragPreview);
-		e.dataTransfer.setDragImage(dragPreview, 20, 20);
-		setTimeout(() => document.body.removeChild(dragPreview), 0);
-	};
+			document.body.appendChild(dragPreview);
+			e.dataTransfer.setDragImage(dragPreview, 20, 20);
+			setTimeout(() => document.body.removeChild(dragPreview), 0);
+		},
+		[onDragStart],
+	);
 
 	const handleFolderDragStart = (e: React.DragEvent, node: Node) => {
 		e.stopPropagation();
@@ -436,30 +601,29 @@ export function DirectoryBrowser({
 		setTimeout(() => document.body.removeChild(dragPreview), 0);
 	};
 
-	const handleDeleteSample = async (sample: Sample) => {
-		try {
-			setDeletingItems((prev) => new Set(prev).add(sample.id));
+	// biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+	const handleDeleteSample = useCallback(
+		async (sample: Sample) => {
+			try {
+				setDeletingItems((prev) => new Set(prev).add(sample.id));
 
-			// Delete the sample from IndexedDB
-			await storage.removeSample(sample.id);
+				// Delete the sample from IndexedDB
+				await storage.removeSample(sample.id);
 
-			// Clear selected sample if it was deleted
-			if (selectedSample?.id === sample.id) {
-				onSampleSelect(null);
+				// Invalidate samples query to refresh the list
+				queryClient.invalidateQueries({ queryKey: ["samples"] });
+			} catch (error) {
+				console.error("Error deleting sample:", error);
+			} finally {
+				setDeletingItems((prev) => {
+					const next = new Set(prev);
+					next.delete(sample.id);
+					return next;
+				});
 			}
-
-			// Invalidate samples query to refresh the list
-			queryClient.invalidateQueries({ queryKey: ["samples"] });
-		} catch (error) {
-			console.error("Error deleting sample:", error);
-		} finally {
-			setDeletingItems((prev) => {
-				const next = new Set(prev);
-				next.delete(sample.id);
-				return next;
-			});
-		}
-	};
+		},
+		[deletingItems, onSampleSelect, queryClient],
+	);
 
 	const handleDeleteFolder = async (path: string, samples: Sample[]) => {
 		try {
@@ -544,79 +708,21 @@ export function DirectoryBrowser({
 
 		if (node.type === "sample") {
 			return (
-				<ContextMenu key={node.sample.id}>
-					<ContextMenuTrigger>
-						<div
-							draggable={!needsPermission}
-							onDragStart={(e) => handleSampleDragStart(e, node.sample)}
-							onDragEnd={onDragEnd}
-							key={node.path}
-							style={{ marginLeft: `${level * 16}px` }}
-							className={`
-								flex items-center gap-2 p-1 rounded-md outline-none
-								${showHighlight ? "bg-primary/10" : "hover:bg-muted/50"}
-								${isSelected && !showHighlight ? "bg-muted/30" : ""}
-								${needsPermission ? "opacity-50 cursor-not-allowed" : ""}
-							`}
-							onClick={() => {
-								if (!needsPermission) {
-									onSampleSelect(node.sample);
-									setSelectedPath("");
-								}
-							}}
-							onKeyDown={(e) => {
-								if (!needsPermission && (e.key === "Enter" || e.key === " ")) {
-									e.preventDefault();
-									onSampleSelect(node.sample);
-								}
-							}}
-							role="treeitem"
-							tabIndex={isSelected ? 0 : -1}
-							aria-selected={isSelected}
-						>
-							<div className="w-4 flex-shrink-0" />
-							<Music className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-							<span className="text-sm truncate">{node.name}</span>
-						</div>
-					</ContextMenuTrigger>
-					<ContextMenuContent>
-						<ContextMenuItem
-							className="text-destructive focus:text-destructive"
-							onSelect={() => handleDeleteSample(node.sample)}
-							disabled={deletingItems.has(node.sample.id)}
-						>
-							{deletingItems.has(node.sample.id) ? (
-								<>
-									<span className="mr-2">Deleting...</span>
-									<svg
-										className="animate-spin h-4 w-4"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										aria-label="Loading..."
-									>
-										<title>Loading...</title>
-										<circle
-											className="opacity-25"
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											strokeWidth="4"
-										/>
-										<path
-											className="opacity-75"
-											fill="currentColor"
-											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-										/>
-									</svg>
-								</>
-							) : (
-								"Delete Sample"
-							)}
-						</ContextMenuItem>
-					</ContextMenuContent>
-				</ContextMenu>
+				<SampleRow
+					key={node.sample.id}
+					sample={node.sample}
+					path={node.path}
+					level={level}
+					isSelected={isSelected}
+					showHighlight={showHighlight}
+					needsPermission={!!needsPermission}
+					onSelect={handleSampleSelect}
+					onDragStart={handleSampleDragStart}
+					onDragEnd={onDragEnd}
+					selectedSampleRef={selectedSampleRef}
+					onDelete={handleDeleteSample}
+					isDeleting={deletingItems.has(node.sample.id)}
+				/>
 			);
 		}
 

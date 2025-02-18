@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, startTransition } from "react";
+import { useCallback, startTransition } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Tone from "tone";
 import { DirectoryBrowser } from "./directory-browser";
@@ -29,7 +29,6 @@ export function SampleList({
 	onSampleSelect,
 }: SampleListProps) {
 	const queryClient = useQueryClient();
-	const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
 
 	// Query for directories
 	const { data: directories = [] } = useQuery({
@@ -74,97 +73,71 @@ export function SampleList({
 		},
 	});
 
-	const analyzeSample = async (sample: Sample | null) => {
-		if (!sample) return;
+	const analyzeSample = useCallback(
+		async (sample: Sample | null) => {
+			if (!sample) return;
 
-		try {
-			// Start transition for UI updates
-			startTransition(() => {
-				onSampleSelect(sample);
-			});
+			try {
+				// Start transition for UI updates
+				startTransition(() => {
+					onSampleSelect(sample);
+				});
 
-			// Get the file from the file system
-			const file = await storage.getFile(sample.filePath, sample.directoryId);
-			const buffer = await file.arrayBuffer();
-			const audioContext = await storage.getAudioContext();
-			const audioBuffer = await audioContext.decodeAudioData(buffer);
+				// Get the file from the file system
+				const file = await storage.getFile(sample.filePath, sample.directoryId);
+				const buffer = await file.arrayBuffer();
+				const audioContext = await storage.getAudioContext();
+				const audioBuffer = await audioContext.decodeAudioData(buffer);
 
-			// Calculate peaks for waveform
-			const channelData = audioBuffer.getChannelData(0);
-			const peaks: number[] = [];
-			const blockSize = Math.floor(channelData.length / 100);
+				// Calculate peaks for waveform
+				const channelData = audioBuffer.getChannelData(0);
+				const peaks: number[] = [];
+				const blockSize = Math.floor(channelData.length / 100);
 
-			for (let i = 0; i < 100; i++) {
-				const start = blockSize * i;
-				let peak = 0;
+				for (let i = 0; i < 100; i++) {
+					const start = blockSize * i;
+					let peak = 0;
 
-				for (let j = 0; j < blockSize; j++) {
-					const value = Math.abs(channelData[start + j]);
-					peak = Math.max(peak, value);
+					for (let j = 0; j < blockSize; j++) {
+						const value = Math.abs(channelData[start + j]);
+						peak = Math.max(peak, value);
+					}
+
+					peaks.push(peak);
 				}
 
-				peaks.push(peak);
-			}
+				// Calculate RMS (volume) level
+				let rmsSum = 0;
+				for (let i = 0; i < channelData.length; i++) {
+					rmsSum += channelData[i] * channelData[i];
+				}
+				const rmsLevel = Math.sqrt(rmsSum / channelData.length);
+				const rmsDb = 20 * Math.log10(rmsLevel);
 
-			// Calculate RMS (volume) level
-			let rmsSum = 0;
-			for (let i = 0; i < channelData.length; i++) {
-				rmsSum += channelData[i] * channelData[i];
-			}
-			const rmsLevel = Math.sqrt(rmsSum / channelData.length);
-			const rmsDb = 20 * Math.log10(rmsLevel);
-
-			// Update sample with audio details
-			await storage.updateSample(sample.id, {
-				duration: audioBuffer.duration,
-				channels: audioBuffer.numberOfChannels,
-				sampleRate: audioBuffer.sampleRate,
-				rmsLevel: rmsDb,
-			});
-
-			// Update the UI with the new details
-			startTransition(() => {
-				onSampleSelect({
-					...sample,
+				// Update sample with audio details
+				await storage.updateSample(sample.id, {
 					duration: audioBuffer.duration,
 					channels: audioBuffer.numberOfChannels,
 					sampleRate: audioBuffer.sampleRate,
 					rmsLevel: rmsDb,
 				});
-			});
-		} catch (error) {
-			console.error("Error analyzing sample:", error);
-		}
-	};
 
-	const handleDragStart = (
-		e: React.DragEvent<HTMLDivElement>,
-		sample: Sample,
-	) => {
-		// Just pass the sample data directly
-		e.dataTransfer.setData("text/plain", JSON.stringify(sample));
-
-		// Create a custom drag preview
-		const dragPreview = document.createElement("div");
-		dragPreview.className =
-			"fixed top-0 left-0 -translate-x-full bg-background border rounded-md px-2 py-1 flex items-center gap-2 pointer-events-none";
-		dragPreview.innerHTML = `
-			<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Audio icon">
-				<title>Audio icon</title>
-				<path d="M12 2v20M2 10h20M2 14h20"/>
-			</svg>
-			<span class="text-xs font-mono">audio</span>
-		`;
-		document.body.appendChild(dragPreview);
-
-		// Set the drag image
-		e.dataTransfer.setDragImage(dragPreview, 20, 20);
-
-		// Remove the preview element after the drag operation
-		requestAnimationFrame(() => {
-			document.body.removeChild(dragPreview);
-		});
-	};
+				// Update the UI with the new details
+				startTransition(() => {
+					onSampleSelect({
+						...sample,
+						duration: audioBuffer.duration,
+						channels: audioBuffer.numberOfChannels,
+						sampleRate: audioBuffer.sampleRate,
+						rmsLevel: rmsDb,
+					});
+				});
+			} catch (error) {
+				console.error("Error analyzing sample:", error);
+			}
+		},
+		[onSampleSelect],
+	);
 
 	if (isLoading) {
 		return (
