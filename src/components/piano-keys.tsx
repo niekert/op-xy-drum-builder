@@ -201,7 +201,7 @@ export function PianoKeys({
 				const arrayBuffer = await file.arrayBuffer();
 
 				// Decode the audio data first
-				const audioContext = new AudioContext();
+				const audioContext = await storage.getAudioContext();
 				const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
 				// Create Tone.js buffer from the decoded audio data
@@ -559,7 +559,7 @@ export function PianoKeys({
 						const arrayBuffer = await file.arrayBuffer();
 
 						// Decode the audio data first
-						const audioContext = new AudioContext();
+						const audioContext = await storage.getAudioContext();
 						const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
 						// Create Tone.js buffer from the decoded audio data
@@ -758,7 +758,7 @@ export function PianoKeys({
 								const arrayBuffer = await file.arrayBuffer();
 
 								// Decode the audio data first
-								const audioContext = new AudioContext();
+								const audioContext = await storage.getAudioContext();
 								const audioBuffer =
 									await audioContext.decodeAudioData(arrayBuffer);
 
@@ -848,6 +848,7 @@ export function PianoKeys({
 			const allSamples: Sample[] = [];
 			for (const dir of directories) {
 				const dirSamples = await storage.getSamples(dir.id);
+				console.log(dirSamples);
 				// Only include samples under 3 seconds
 				allSamples.push(
 					...dirSamples
@@ -861,6 +862,8 @@ export function PianoKeys({
 						})),
 				);
 			}
+
+			console.log(allSamples.length, allSamples);
 
 			if (allSamples.length === 0) {
 				setError("No samples found");
@@ -924,11 +927,10 @@ export function PianoKeys({
 						);
 
 						const note = newKeys[keyIndex].note;
-
 						const arrayBuffer = await file.arrayBuffer();
 
 						// Decode the audio data first
-						const audioContext = new AudioContext();
+						const audioContext = await storage.getAudioContext();
 						const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
 						// Create Tone.js buffer from the decoded audio data

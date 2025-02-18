@@ -86,7 +86,7 @@ export function SampleList({
 			// Get the file from the file system
 			const file = await storage.getFile(sample.filePath, sample.directoryId);
 			const buffer = await file.arrayBuffer();
-			const audioContext = new AudioContext();
+			const audioContext = await storage.getAudioContext();
 			const audioBuffer = await audioContext.decodeAudioData(buffer);
 
 			// Calculate peaks for waveform

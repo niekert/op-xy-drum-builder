@@ -98,11 +98,22 @@ interface SampleDB extends DBSchema {
 	};
 }
 
+type ProgressState = {
+	type: "scanning" | "processing";
+	detectedCount?: number;
+	total?: number;
+	processed?: number;
+};
+
+type ProgressListener = (state: ProgressState) => void;
+
 class StorageService {
 	private db: IDBPDatabase<SampleDB> | null = null;
 	private directoryHandles: Map<string, FileSystemDirectoryHandle> = new Map();
 	private directoryPermissions: Map<string, boolean> = new Map();
 	private static instance: StorageService;
+	private audioContext: AudioContext | null = null;
+	private progressListeners: Set<ProgressListener> = new Set();
 
 	private constructor() {
 		void this.initDB();
@@ -135,6 +146,15 @@ class StorageService {
 				drumRackStore.createIndex("by-name", "name");
 			},
 		});
+	}
+
+	async getAudioContext(): Promise<AudioContext> {
+		if (!this.audioContext || this.audioContext.state === "closed") {
+			this.audioContext = new AudioContext();
+		} else if (this.audioContext.state === "suspended") {
+			await this.audioContext.resume();
+		}
+		return this.audioContext;
 	}
 
 	// Directory methods
@@ -198,7 +218,7 @@ class StorageService {
 				});
 
 				// Get all current file paths in the directory
-				const entries = await this.scanDirectory(handle);
+				const { entries } = await this.scanDirectory(handle);
 				const currentPaths = new Set(entries.map((e) => e.path));
 
 				// Get existing samples and remove ones that no longer exist
@@ -232,6 +252,21 @@ class StorageService {
 		}
 	}
 
+	// Add methods to manage progress listeners
+	addProgressListener(listener: ProgressListener) {
+		this.progressListeners.add(listener);
+	}
+
+	removeProgressListener(listener: ProgressListener) {
+		this.progressListeners.delete(listener);
+	}
+
+	private emitProgress(state: ProgressState) {
+		for (const listener of this.progressListeners) {
+			listener(state);
+		}
+	}
+
 	async addDirectory(): Promise<DirectoryMetadata | null> {
 		if (!this.db) await this.initDB();
 		if (!this.db) throw new Error("Failed to initialize database");
@@ -252,15 +287,41 @@ class StorageService {
 			this.directoryPermissions.set(id, true);
 			await this.db.put("directories", directory);
 
+			// Start scanning with indefinite progress
+			this.emitProgress({ type: "scanning", detectedCount: 0 });
+
 			// Scan for samples since we have permission
-			const entries = await this.scanDirectory(handle);
-			for (const entry of entries) {
+			const { entries } = await this.scanDirectory(handle);
+
+			// Start processing phase
+			this.emitProgress({
+				type: "processing",
+				total: entries.length,
+				processed: 0,
+			});
+
+			// Process each detected sample
+			for (let i = 0; i < entries.length; i++) {
+				const entry = entries[i];
 				if (entry.handle.kind === "file") {
 					const file = await entry.handle.getFile();
+
+					// Decode audio file to get metadata
+					const arrayBuffer = await file.arrayBuffer();
+					const audioContext = await this.getAudioContext();
+					const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
 					await this.upsertSample(file, entry.path, id, {
-						duration: undefined,
-						channels: undefined,
-						sampleRate: undefined,
+						duration: audioBuffer.duration,
+						channels: audioBuffer.numberOfChannels,
+						sampleRate: audioBuffer.sampleRate,
+					});
+
+					// Update progress
+					this.emitProgress({
+						type: "processing",
+						total: entries.length,
+						processed: i + 1,
 					});
 				}
 			}
@@ -299,34 +360,6 @@ class StorageService {
 		if (!this.db) await this.initDB();
 		if (!this.db) throw new Error("Failed to initialize database");
 		return this.db.getAllFromIndex("samples", "by-directory", directoryId);
-	}
-
-	async addSample(
-		file: File,
-		filePath: string,
-		directoryId: string,
-		audioDetails: {
-			duration?: number;
-			channels?: number;
-			sampleRate?: number;
-		},
-	): Promise<void> {
-		if (!this.db) throw new Error("Database not initialized");
-
-		const sample: SampleMetadata = {
-			id: crypto.randomUUID(),
-			name: file.name,
-			filePath,
-			directoryId,
-			directoryPath: filePath.split("/").slice(0, -1).join("/"),
-			duration: audioDetails.duration ?? 0,
-			channels: audioDetails.channels ?? 0,
-			sampleRate: audioDetails.sampleRate ?? 0,
-			rmsLevel: 0,
-			createdAt: Date.now(),
-		};
-
-		await this.db.put("samples", sample);
 	}
 
 	async removeSample(id: string): Promise<void> {
@@ -448,30 +481,135 @@ class StorageService {
 	async scanDirectory(
 		handle: FileSystemDirectoryHandle,
 		parentPath = "",
-	): Promise<DirectoryEntry[]> {
+		runningCount = 0,
+	): Promise<{ entries: DirectoryEntry[]; totalDetected: number }> {
 		const entries: DirectoryEntry[] = [];
 		const currentPath = parentPath
 			? `${parentPath}/${handle.name}`
 			: handle.name;
 
+		let detectedCount = runningCount;
+
 		for await (const entry of handle.values()) {
 			if (entry.kind === "file") {
 				// Check if file has an allowed audio extension
 				if (entry.name.match(/\.(wav|mp3|aiff?|m4a)$/i)) {
-					entries.push({
-						handle: entry,
-						name: entry.name,
-						path: `${currentPath}/${entry.name}`,
-					});
+					try {
+						const file = await entry.getFile();
+						if (await this.isLikelyDrumOneShot(file)) {
+							entries.push({
+								handle: entry,
+								name: entry.name,
+								path: `${currentPath}/${entry.name}`,
+							});
+							detectedCount++;
+							// Emit progress update for detection phase
+							this.emitProgress({
+								type: "scanning",
+								detectedCount,
+							});
+						}
+					} catch (error) {
+						console.warn(`Failed to analyze file ${entry.name}:`, error);
+					}
 				}
 			} else if (entry.kind === "directory") {
-				// Recursively scan subdirectories
-				const subEntries = await this.scanDirectory(entry, currentPath);
+				// Recursively scan subdirectories with current count
+				const { entries: subEntries, totalDetected } = await this.scanDirectory(
+					entry,
+					currentPath,
+					detectedCount,
+				);
 				entries.push(...subEntries);
+				detectedCount = totalDetected; // Update our count with the total from subdirectory
 			}
 		}
 
-		return entries;
+		return { entries, totalDetected: detectedCount };
+	}
+
+	private async isLikelyDrumOneShot(file: File): Promise<boolean> {
+		// First quick check - file size should be relatively small
+		if (file.size > 2 * 1024 * 1024) {
+			// > 2MB
+			return false;
+		}
+
+		try {
+			const arrayBuffer = await file.arrayBuffer();
+			const audioContext = await this.getAudioContext();
+			const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+			// Check 1: Duration should be short (less than 2 seconds for one-shots)
+			if (audioBuffer.duration > 2) {
+				return false;
+			}
+
+			const channelData = audioBuffer.getChannelData(0);
+			const sampleRate = audioBuffer.sampleRate;
+
+			// Check 2: Find the maximum amplitude and its position
+			let maxAmplitude = 0;
+			let maxIndex = 0;
+			for (let i = 0; i < channelData.length; i++) {
+				const abs = Math.abs(channelData[i]);
+				if (abs > maxAmplitude) {
+					maxAmplitude = abs;
+					maxIndex = i;
+				}
+			}
+
+			// Check 3: Attack time should be quick (within first 50ms)
+			const attackSamples = Math.floor(0.05 * sampleRate);
+			if (maxIndex > attackSamples) {
+				return false;
+			}
+
+			// Check 4: Analyze decay pattern
+			// Get RMS values for small windows after the peak
+			const windowSize = Math.floor(0.01 * sampleRate); // 10ms windows
+			const numWindows = 10; // Analyze first 100ms after peak
+			let previousRMS = 0;
+			let decayCount = 0;
+
+			for (let i = 0; i < numWindows; i++) {
+				const startIndex = maxIndex + i * windowSize;
+				const endIndex = startIndex + windowSize;
+
+				let rmsSum = 0;
+				for (let j = startIndex; j < endIndex && j < channelData.length; j++) {
+					rmsSum += channelData[j] * channelData[j];
+				}
+				const currentRMS = Math.sqrt(rmsSum / windowSize);
+
+				if (currentRMS < previousRMS) {
+					decayCount++;
+				}
+				previousRMS = currentRMS;
+			}
+
+			// Check if we have a consistent decay pattern (at least 7 out of 10 windows show decay)
+			const hasGoodDecay = decayCount >= 7;
+
+			// Check 5: Analyze if the sound has significant content after initial decay
+			const tailStartIndex = maxIndex + numWindows * windowSize;
+			let tailEnergy = 0;
+			let tailCount = 0;
+
+			for (let i = tailStartIndex; i < channelData.length; i++) {
+				tailEnergy += Math.abs(channelData[i]);
+				tailCount++;
+			}
+
+			const averageTailAmplitude = tailEnergy / tailCount;
+			const hasSilentTail = averageTailAmplitude < maxAmplitude * 0.1; // Tail should be < 10% of peak
+
+			// Final decision - must meet all criteria
+			return hasGoodDecay && hasSilentTail;
+		} catch (error) {
+			console.warn(`Failed to analyze audio file ${file.name}:`, error);
+			return false;
+		}
 	}
 
 	async upsertSample(

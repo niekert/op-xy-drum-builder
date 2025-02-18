@@ -42,7 +42,7 @@ export default function Home() {
 					</p>
 
 					{/* Guide Section */}
-					<div className="mt-8 max-w-1.5xl mx-auto text-left p-4 rounded-lg border bg-card">
+					<div className="mt-8 max-w-1.5xl mx-auto text-left p-4 rounded-lg border bg-card max-w-fit">
 						<h3 className="font-mono text-sm mb-4">quick guide</h3>
 						<ol className="space-y-3 text-sm text-muted-foreground">
 							<li className="flex gap-2">
@@ -142,7 +142,7 @@ export default function Home() {
 						<span className="absolute -top-3 left-4 px-2 text-xs text-muted-foreground bg-background">
 							browser
 						</span>
-						<div className="h-[400px] border rounded-lg bg-card">
+						<div className="h-[400px] border-t border-l border-r">
 							<SampleList
 								onDragStart={(type, data) =>
 									setDragItem({ type: type as any, data })
@@ -159,7 +159,7 @@ export default function Home() {
 						<span className="absolute -top-3 left-4 px-2 text-xs text-muted-foreground bg-background">
 							mapping
 						</span>
-						<div className="border rounded-lg p-4">
+						<div className="border rounded-b-lg p-4">
 							<PianoKeys
 								dragItem={dragItem}
 								selectedSample={selectedSample}
