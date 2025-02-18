@@ -4,8 +4,9 @@ import { Dropzone } from "@/components/dropzone";
 import { SampleList } from "@/components/sample-list";
 import { PianoKeys } from "@/components/piano-keys";
 import { useCallback, useRef, useState } from "react";
-import type { Sample } from "@/lib/storage";
+import { storage, type Sample } from "@/lib/storage";
 import { DirectoryBrowserRef } from "@/components/directory-browser";
+import { useQuery } from "@tanstack/react-query";
 
 type DragItem = {
 	type: "folder" | "sample";
@@ -14,7 +15,7 @@ type DragItem = {
 
 export default function Home() {
 	const [dragItem, setDragItem] = useState<DragItem | null>(null);
-	const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+	const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
 	const directoryBrowserRef = useRef<DirectoryBrowserRef>(null);
 	const scrollTimeout = useRef<number | null>(null);
 
@@ -25,8 +26,20 @@ export default function Home() {
 		[],
 	);
 
+	const { data: selectedSample } = useQuery({
+		queryKey: ["samples", selectedSampleId],
+		queryFn: async () => {
+			if (selectedSampleId) {
+				return await storage.getSample(selectedSampleId);
+			}
+
+			return null;
+		},
+		enabled: !!selectedSampleId,
+	});
+
 	const onSampleSelect = useCallback((sample: Sample | null) => {
-		setSelectedSample(sample);
+		setSelectedSampleId(sample?.id ?? null);
 	}, []);
 
 	const handleDragEnd = useCallback(() => {
@@ -34,7 +47,12 @@ export default function Home() {
 	}, []);
 
 	const handleSelectSampleFromKey = useCallback((sample: Sample) => {
-		setSelectedSample(sample);
+		setSelectedSampleId(sample?.id ?? null);
+
+		const sampler = directoryBrowserRef.current;
+		if (!sampler) return;
+
+		sampler.playSample(sample);
 
 		if (scrollTimeout.current) {
 			clearTimeout(scrollTimeout.current);
@@ -42,9 +60,8 @@ export default function Home() {
 		}
 
 		scrollTimeout.current = window.setTimeout(() => {
-			if (!directoryBrowserRef.current) return;
-			directoryBrowserRef.current.scrollToSample(sample.id);
-		}, 50);
+			sampler.scrollToSample(sample.id);
+		}, 250);
 	}, []);
 
 	return (
@@ -178,7 +195,7 @@ export default function Home() {
 							<SampleList
 								onDragStart={handleDragStart}
 								onDragEnd={handleDragEnd}
-								selectedSample={selectedSample}
+								selectedSample={selectedSample ?? null}
 								onSampleSelect={onSampleSelect}
 								ref={directoryBrowserRef}
 							/>
@@ -193,7 +210,7 @@ export default function Home() {
 						<div className="border rounded-b-lg p-4">
 							<PianoKeys
 								dragItem={dragItem}
-								selectedSample={selectedSample}
+								selectedSample={selectedSample ?? null}
 								onSampleSelect={handleSelectSampleFromKey}
 							/>
 						</div>

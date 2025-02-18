@@ -12,7 +12,14 @@ import {
 	useImperativeHandle,
 	Ref,
 } from "react";
-import { ChevronRight, ChevronDown, Folder, Music, Lock } from "lucide-react";
+import {
+	ChevronRight,
+	ChevronDown,
+	Folder,
+	Music,
+	Lock,
+	Search,
+} from "lucide-react";
 import * as Tone from "tone";
 import { storage } from "@/lib/storage";
 import type { Sample } from "@/lib/storage";
@@ -28,10 +35,11 @@ import type { VirtualItem } from "@tanstack/react-virtual";
 
 export type DirectoryBrowserRef = {
 	scrollToSample: (sampleId: string) => void;
+	playSample: (sample: Sample) => Promise<void>;
 };
 
 type DirectoryBrowserProps = {
-	samples: Sample[];
+	samples: Record<string, Sample>;
 	onSampleSelect: (sample: Sample | null) => void;
 	selectedSample: Sample | null;
 	onDragStart: (
@@ -58,6 +66,14 @@ type SampleNode = {
 };
 
 type Node = FolderNode | SampleNode;
+
+// Add this type before the DirectoryBrowser component
+type SearchIndex = {
+	samples: Map<string, Sample>;
+	folders: Map<string, FolderNode>;
+	sampleNameIndex: Map<string, Set<string>>; // lowercase name -> sample ids
+	folderNameIndex: Map<string, Set<string>>; // lowercase name -> folder paths
+};
 
 // Add the SampleRow component before the DirectoryBrowser component
 const SampleRow = memo(function SampleRow({
@@ -171,6 +187,7 @@ export function DirectoryBrowser({
 	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
 		new Set(),
 	);
+	const [searchQuery, setSearchQuery] = useState("");
 	const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
 	const [requestingPermission, setRequestingPermission] = useState<Set<string>>(
 		new Set(),
@@ -183,8 +200,6 @@ export function DirectoryBrowser({
 
 	// Add a ref to track the selected sample element
 	const selectedSampleRef = useRef<HTMLDivElement>(null);
-	// Add ref to track if sample was selected via direct click
-	const wasClickedRef = useRef(false);
 
 	// Query for directory permissions
 	const { data: directories = [] } = useQuery({
@@ -200,60 +215,6 @@ export function DirectoryBrowser({
 			}
 		};
 	}, []);
-
-	// Modify the play sample effect to only play on direct clicks
-	useEffect(() => {
-		const playSample = async () => {
-			if (
-				!selectedSample?.filePath ||
-				!selectedSample?.directoryId ||
-				!wasClickedRef.current
-			)
-				return;
-
-			try {
-				// Stop and dispose previous player
-				if (playerRef.current) {
-					playerRef.current.stop();
-					playerRef.current.dispose();
-				}
-
-				// Get the file from the file system
-				const file = await storage.getFile(
-					selectedSample.filePath,
-					selectedSample.directoryId,
-				);
-				const arrayBuffer = await file.arrayBuffer();
-
-				// Decode the audio data first
-				const audioContext = new AudioContext();
-				const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-				// Create Tone.js buffer from the decoded audio data
-				const buffer = new Tone.ToneAudioBuffer();
-				buffer.fromArray(audioBuffer.getChannelData(0));
-
-				// Create new player with the buffer
-				const player = new Tone.Player(buffer).toDestination();
-				playerRef.current = player;
-
-				// Make sure context is running
-				if (Tone.context.state !== "running") {
-					await Tone.start();
-				}
-
-				// Play the sample
-				player.start();
-			} catch (error) {
-				console.error("Error playing sample:", error);
-			} finally {
-				// Reset the click flag after playing
-				wasClickedRef.current = false;
-			}
-		};
-
-		playSample();
-	}, [selectedSample]);
 
 	// Effect to handle expanding folders and scrolling when a sample is selected
 	useEffect(() => {
@@ -337,7 +298,7 @@ export function DirectoryBrowser({
 		};
 
 		// Add all samples to the tree
-		for (const sample of samples) {
+		for (const sample of Object.values(samples)) {
 			const directory =
 				sample.directoryPath === "/" ? "" : sample.directoryPath;
 			const parent = ensurePath(directory);
@@ -413,32 +374,166 @@ export function DirectoryBrowser({
 		return visibleNodes;
 	}, [expandedFolders, tree]);
 
-	// Get flattened list of visible nodes for virtualization
+	// Create and memoize search index
+	const searchIndex = useMemo<SearchIndex>(() => {
+		const index: SearchIndex = {
+			samples: new Map(),
+			folders: new Map(),
+			sampleNameIndex: new Map(),
+			folderNameIndex: new Map(),
+		};
+
+		// Helper to add to name index
+		const addToNameIndex = (
+			name: string,
+			id: string,
+			map: Map<string, Set<string>>,
+		) => {
+			const lowerName = name.toLowerCase();
+			const words = lowerName.split(/[\s-_]+/);
+			for (const word of words) {
+				if (!map.has(word)) {
+					map.set(word, new Set());
+				}
+				map.get(word)?.add(id);
+			}
+		};
+
+		// Index all samples
+		for (const sample of Object.values(samples)) {
+			index.samples.set(sample.id, sample);
+			addToNameIndex(sample.name, sample.id, index.sampleNameIndex);
+		}
+
+		// Index all folders from the tree
+		const indexFolder = (node: Node) => {
+			if (node.type === "folder") {
+				index.folders.set(node.path, node);
+				addToNameIndex(node.name, node.path, index.folderNameIndex);
+				for (const child of node.children) {
+					indexFolder(child);
+				}
+			}
+		};
+		indexFolder(tree);
+
+		return index;
+	}, [samples, tree]);
+
+	// Search function
+	const getSearchResults = useCallback(
+		(query: string) => {
+			if (!query.trim()) return null;
+
+			const results = {
+				samples: new Set<string>(),
+				folders: new Set<string>(),
+				parentFolders: new Set<string>(),
+			};
+
+			const searchWords = query.toLowerCase().split(/[\s-_]+/);
+
+			// Search samples
+			for (const word of searchWords) {
+				const matchingSampleIds = searchIndex.sampleNameIndex.get(word);
+				if (matchingSampleIds) {
+					for (const id of matchingSampleIds) {
+						results.samples.add(id);
+					}
+				}
+			}
+
+			// Search folders
+			for (const word of searchWords) {
+				const matchingFolderPaths = searchIndex.folderNameIndex.get(word);
+				if (matchingFolderPaths) {
+					for (const path of matchingFolderPaths) {
+						results.folders.add(path);
+					}
+				}
+			}
+
+			// Add parent folders of matching items
+			const addParentFolders = (path: string) => {
+				const parts = path.split("/").filter(Boolean);
+				let currentPath = "";
+				for (const part of parts.slice(0, -1)) {
+					currentPath = currentPath ? `${currentPath}/${part}` : part;
+					results.parentFolders.add(currentPath);
+				}
+			};
+
+			// Add parents of matching samples
+			for (const id of results.samples) {
+				const sample = searchIndex.samples.get(id);
+				if (sample) {
+					addParentFolders(sample.directoryPath);
+				}
+			}
+
+			// Add parents of matching folders
+			for (const path of results.folders) {
+				addParentFolders(path);
+			}
+
+			return results;
+		},
+		[searchIndex],
+	);
+
+	// Filter visible nodes based on search
 	const visibleNodes = useMemo(() => {
 		const nodes: { node: Node; level: number }[] = [];
+		const searchResults = searchQuery ? getSearchResults(searchQuery) : null;
+
+		const shouldShowNode = (node: Node): boolean => {
+			if (!searchResults) return true;
+
+			if (node.type === "sample") {
+				return searchResults.samples.has(node.sample.id);
+			}
+
+			// For folders, show if:
+			// 1. The folder itself matches
+			// 2. It's a parent of a match
+			// 3. It has matching samples in its subtree
+			const folder = node as FolderNode;
+			return (
+				searchResults.folders.has(node.path) ||
+				searchResults.parentFolders.has(node.path) ||
+				folder.samples.some((sample) => searchResults.samples.has(sample.id))
+			);
+		};
 
 		const addNode = (node: Node, level: number) => {
 			// Skip root node
 			if (node.path === "/" && node.type === "folder") {
 				for (const child of node.children) {
-					addNode(child, level);
+					if (shouldShowNode(child)) {
+						addNode(child, level);
+					}
 				}
 				return;
 			}
 
-			nodes.push({ node, level });
+			if (shouldShowNode(node)) {
+				nodes.push({ node, level });
 
-			// Add children if it's an expanded folder
-			if (node.type === "folder" && expandedFolders.has(node.path)) {
-				for (const child of node.children) {
-					addNode(child, level + 1);
+				// Add children if it's an expanded folder
+				if (node.type === "folder" && expandedFolders.has(node.path)) {
+					for (const child of node.children) {
+						// For children in search mode, we only show matching samples or folders that should be shown
+						if (!searchQuery || shouldShowNode(child)) {
+							addNode(child, level + 1);
+						}
+					}
 				}
 			}
 		};
 
 		addNode(tree, 0);
 		return nodes;
-	}, [tree, expandedFolders]);
+	}, [tree, expandedFolders, searchQuery, getSearchResults]);
 
 	// Setup virtualizer
 	const virtualizer = useVirtualizer({
@@ -447,6 +542,44 @@ export function DirectoryBrowser({
 		estimateSize: () => 32, // Estimated height of each row
 		overscan: 5, // Number of items to render outside of the visible area
 	});
+
+	const playSample = useCallback(async (sample: Sample) => {
+		if (!sample?.filePath || !sample?.directoryId) return;
+
+		try {
+			// Stop and dispose previous player
+			if (playerRef.current) {
+				playerRef.current.stop();
+				playerRef.current.dispose();
+			}
+
+			// Get the file from the file system
+			const file = await storage.getFile(sample.filePath, sample.directoryId);
+			const arrayBuffer = await file.arrayBuffer();
+
+			// Decode the audio data first
+			const audioContext = new AudioContext();
+			const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+			// Create Tone.js buffer from the decoded audio data
+			const buffer = new Tone.ToneAudioBuffer();
+			buffer.fromArray(audioBuffer.getChannelData(0));
+
+			// Create new player with the buffer
+			const player = new Tone.Player(buffer).toDestination();
+			playerRef.current = player;
+
+			// Make sure context is running
+			if (Tone.context.state !== "running") {
+				await Tone.start();
+			}
+
+			// Play the sample
+			player.start();
+		} catch (error) {
+			console.error("Error playing sample:", error);
+		}
+	}, []);
 
 	useImperativeHandle(ref, () => {
 		return {
@@ -461,6 +594,7 @@ export function DirectoryBrowser({
 					});
 				}
 			},
+			playSample,
 		};
 	});
 
@@ -606,8 +740,10 @@ export function DirectoryBrowser({
 		(sample: Sample) => {
 			onSampleSelect(sample);
 			setSelectedPath("");
+
+			playSample(sample);
 		},
-		[onSampleSelect],
+		[onSampleSelect, playSample],
 	);
 
 	const handleSampleDragStart = useCallback(
@@ -897,85 +1033,99 @@ export function DirectoryBrowser({
 	};
 
 	return (
-		<div
-			ref={containerRef}
-			className="h-full overflow-auto focus:outline-none"
-			role="tree"
-			aria-label="Sample browser"
-		>
+		<div className="flex flex-col h-full">
+			<div className="p-2 border-b">
+				<div className="relative">
+					<input
+						type="text"
+						placeholder="Search samples and folders..."
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+						className="w-full pl-8 pr-2 py-1 text-sm bg-muted/50 rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
+					/>
+					<Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+				</div>
+			</div>
 			<div
-				style={{
-					height: `${virtualizer.getTotalSize()}px`,
-					width: "100%",
-					position: "relative",
-				}}
+				ref={containerRef}
+				className="flex-1 overflow-auto focus:outline-none"
+				role="tree"
+				aria-label="Sample browser"
 			>
-				{virtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
-					const { node, level } = visibleNodes[virtualRow.index];
-					const isSelected =
-						node.type === "sample"
-							? node.sample?.id === selectedSample?.id
-							: node.path === selectedPath;
-					const showHighlight = node.type === "sample" && isSelected;
-					const directory = directories.find((d) => d.path === node.path);
-					const needsPermission = directory && !directory.hasPermission;
+				<div
+					style={{
+						height: `${virtualizer.getTotalSize()}px`,
+						width: "100%",
+						position: "relative",
+					}}
+				>
+					{virtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
+						const { node, level } = visibleNodes[virtualRow.index];
+						const isSelected =
+							node.type === "sample"
+								? node.sample?.id === selectedSample?.id
+								: node.path === selectedPath;
+						const showHighlight = node.type === "sample" && isSelected;
+						const directory = directories.find((d) => d.path === node.path);
+						const needsPermission = directory && !directory.hasPermission;
 
-					return (
-						<div
-							key={virtualRow.key}
-							data-index={virtualRow.index}
-							ref={isSelected ? selectedSampleRef : null}
-							style={{
-								position: "absolute",
-								top: 0,
-								left: 0,
-								width: "100%",
-								height: `${virtualRow.size}px`,
-								transform: `translateY(${virtualRow.start}px)`,
-							}}
-						>
-							{node.type === "sample" ? (
-								<SampleRow
-									sample={node.sample}
-									path={node.path}
-									level={level}
-									isSelected={isSelected}
-									showHighlight={showHighlight}
-									needsPermission={!!needsPermission}
-									onSelect={handleSampleSelect}
-									onDragStart={handleSampleDragStart}
-									onDragEnd={onDragEnd}
-									selectedSampleRef={selectedSampleRef}
-									onDelete={handleDeleteSample}
-									isDeleting={deletingItems.has(node.sample.id)}
-								/>
-							) : (
-								<FolderRow
-									node={node}
-									path={node.path}
-									level={level}
-									isSelected={isSelected}
-									isExpanded={expandedFolders.has(node.path)}
-									needsPermission={!!needsPermission}
-									isRequestingPermission={requestingPermission.has(
-										directory?.id || "",
-									)}
-									onToggle={() => {
-										if (needsPermission && directory) {
-											handleRequestPermission(directory.id);
-										} else {
-											setSelectedPath(node.path);
-											queryClient.setQueryData(["selectedSample"], null);
-											toggleFolder(node.path);
-										}
-									}}
-									onDragStart={handleFolderDragStart}
-									onDragEnd={onDragEnd}
-								/>
-							)}
-						</div>
-					);
-				})}
+						return (
+							<div
+								key={virtualRow.key}
+								data-index={virtualRow.index}
+								ref={isSelected ? selectedSampleRef : null}
+								style={{
+									position: "absolute",
+									top: 0,
+									left: 0,
+									width: "100%",
+									height: `${virtualRow.size}px`,
+									transform: `translateY(${virtualRow.start}px)`,
+								}}
+							>
+								{node.type === "sample" ? (
+									<SampleRow
+										sample={node.sample}
+										path={node.path}
+										level={level}
+										isSelected={isSelected}
+										showHighlight={showHighlight}
+										needsPermission={!!needsPermission}
+										onSelect={handleSampleSelect}
+										onDragStart={handleSampleDragStart}
+										onDragEnd={onDragEnd}
+										selectedSampleRef={selectedSampleRef}
+										onDelete={handleDeleteSample}
+										isDeleting={deletingItems.has(node.sample.id)}
+									/>
+								) : (
+									<FolderRow
+										node={node}
+										path={node.path}
+										level={level}
+										isSelected={isSelected}
+										isExpanded={expandedFolders.has(node.path)}
+										needsPermission={!!needsPermission}
+										isRequestingPermission={requestingPermission.has(
+											directory?.id || "",
+										)}
+										onToggle={() => {
+											if (needsPermission && directory) {
+												handleRequestPermission(directory.id);
+											} else {
+												setSelectedPath(node.path);
+												queryClient.setQueryData(["selectedSample"], null);
+												toggleFolder(node.path);
+											}
+										}}
+										onDragStart={handleFolderDragStart}
+										onDragEnd={onDragEnd}
+									/>
+								)}
+							</div>
+						);
+					})}
+				</div>
 			</div>
 		</div>
 	);

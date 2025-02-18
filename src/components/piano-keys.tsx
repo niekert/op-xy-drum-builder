@@ -253,74 +253,11 @@ export function PianoKeys({
 			const buffer = buffersRef.current[note];
 			const key = keys.find((k) => k.note === note);
 
-			if (player && buffer && key?.sample) {
-				try {
-					// Make sure context is running
-					if (Tone.context.state !== "running") {
-						await Tone.start();
-					}
-
-					// Make sure the buffer is loaded
-					if (!buffer.loaded) {
-						setError("Sample is still loading...");
-						return;
-					}
-
-					// Stop and restart the player immediately
-					player.stop().start();
-
-					// Update the selected sample
-					onSampleSelect(key.sample);
-
-					// Analyze the sample for waveform
-					const audioBuffer = buffer.get();
-					if (audioBuffer) {
-						const channelData = audioBuffer.getChannelData(0);
-						const peaks: number[] = [];
-						const blockSize = Math.floor(channelData.length / 100);
-
-						for (let i = 0; i < 100; i++) {
-							const start = blockSize * i;
-							let peak = 0;
-
-							for (let j = 0; j < blockSize; j++) {
-								const value = Math.abs(channelData[start + j]);
-								peak = Math.max(peak, value);
-							}
-
-							peaks.push(peak);
-						}
-
-						// Calculate RMS (volume) level
-						let rmsSum = 0;
-						for (let i = 0; i < channelData.length; i++) {
-							rmsSum += channelData[i] * channelData[i];
-						}
-						const rmsLevel = Math.sqrt(rmsSum / channelData.length);
-						const rmsDb = 20 * Math.log10(rmsLevel);
-
-						// Update sample with audio details
-						await storage.updateSample(key.sample.id, {
-							duration: audioBuffer.duration,
-							channels: audioBuffer.numberOfChannels,
-							sampleRate: audioBuffer.sampleRate,
-							rmsLevel: rmsDb,
-						});
-
-						// Update the waveform data in the cache
-						queryClient.setQueriesData(
-							{ queryKey: ["waveform"] },
-							{
-								peaks,
-								duration: audioBuffer.duration,
-							},
-						);
-					}
-				} catch (error) {
-					console.error("Error playing sample:", error);
-					setError("Failed to play sample");
-				}
+			if (key?.sample) {
+				// Update the selected sample
+				onSampleSelect(key.sample);
 			}
+
 			// Reset active key after 100ms
 			setTimeout(() => setActiveKey(null), 100);
 		},
@@ -522,62 +459,6 @@ export function PianoKeys({
 		} catch (error) {
 			console.error("Error saving drum rack:", error);
 			setError("Failed to save drum rack");
-		}
-	};
-
-	const handleLoad = async (rack: DrumRack) => {
-		try {
-			// Clean up existing players and buffers
-			for (const player of Object.values(playersRef.current)) {
-				player.dispose();
-			}
-			for (const buffer of Object.values(buffersRef.current)) {
-				buffer.dispose();
-			}
-			playersRef.current = {};
-			buffersRef.current = {};
-
-			// Load new configuration
-			setKeys(rack.configuration.keys);
-			setCurrentRack(rack);
-			setRackName(rack.name);
-			setIsLoadOpen(false);
-			setError(null);
-
-			// Load samples
-			for (const key of rack.configuration.keys) {
-				if (key.sample?.filePath && key.sample?.directoryId) {
-					try {
-						// Get the file from the file system
-						const file = await storage.getFile(
-							key.sample.filePath,
-							key.sample.directoryId,
-						);
-
-						const note = key.note;
-
-						const arrayBuffer = await file.arrayBuffer();
-
-						// Decode the audio data first
-						const audioContext = await storage.getAudioContext();
-						const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-						// Create Tone.js buffer from the decoded audio data
-						const buffer = new Tone.ToneAudioBuffer();
-						buffer.fromArray(audioBuffer.getChannelData(0));
-
-						// Create new player with the buffer
-						buffersRef.current[note] = buffer;
-						const player = new Tone.Player(buffer).toDestination();
-						playersRef.current[note] = player;
-					} catch (error) {
-						console.error(`Failed to load sample for ${key.note}:`, error);
-					}
-				}
-			}
-		} catch (error) {
-			console.error("Error loading drum rack:", error);
-			setError("Failed to load drum rack");
 		}
 	};
 

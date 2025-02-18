@@ -53,6 +53,7 @@ interface SampleMetadata {
 	channels: number;
 	sampleRate: number;
 	rmsLevel: number;
+	peaks?: number[];
 	createdAt: number;
 }
 
@@ -235,11 +236,7 @@ class StorageService {
 				for (const entry of entries) {
 					if (entry.handle.kind === "file") {
 						const file = await entry.handle.getFile();
-						await this.upsertSample(file, entry.path, directoryId, {
-							duration: undefined,
-							channels: undefined,
-							sampleRate: undefined,
-						});
+						await this.upsertSample(file, entry.path, directoryId);
 					}
 				}
 
@@ -305,17 +302,7 @@ class StorageService {
 				const entry = entries[i];
 				if (entry.handle.kind === "file") {
 					const file = await entry.handle.getFile();
-
-					// Decode audio file to get metadata
-					const arrayBuffer = await file.arrayBuffer();
-					const audioContext = await this.getAudioContext();
-					const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-					await this.upsertSample(file, entry.path, id, {
-						duration: audioBuffer.duration,
-						channels: audioBuffer.numberOfChannels,
-						sampleRate: audioBuffer.sampleRate,
-					});
+					await this.upsertSample(file, entry.path, id);
 
 					// Update progress
 					this.emitProgress({
@@ -374,6 +361,7 @@ class StorageService {
 			channels: number;
 			sampleRate: number;
 			rmsLevel: number;
+			peaks: number[];
 		}>,
 	): Promise<void> {
 		if (!this.db) throw new Error("Database not initialized");
@@ -385,6 +373,14 @@ class StorageService {
 			...sample,
 			...updates,
 		});
+	}
+
+	async getSample(id: string): Promise<SampleMetadata | null> {
+		if (!this.db) await this.initDB();
+		if (!this.db) throw new Error("Database not initialized");
+
+		const sample = await this.db.get("samples", id);
+		return sample ?? null;
 	}
 
 	// Drum rack methods
@@ -612,39 +608,80 @@ class StorageService {
 		}
 	}
 
+	async updateSampleDetails(
+		file: File,
+		filePath: string,
+		directoryId: string,
+	): Promise<void> {
+		if (!this.db) throw new Error("Database not initialized");
+
+		try {
+			// First get existing sample if any
+			const existingSamples = await this.getSamples(directoryId);
+			const existingSample: SampleMetadata | undefined = existingSamples.find(
+				(s) => s.filePath === filePath,
+			);
+
+			// Then do the audio analysis
+			const arrayBuffer = await file.arrayBuffer();
+			const audioContext = await this.getAudioContext();
+			const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+			// Analyze waveform
+			const channelData = audioBuffer.getChannelData(0);
+			const peaks: number[] = [];
+			const blockSize = Math.floor(channelData.length / 100);
+
+			for (let i = 0; i < 100; i++) {
+				const start = blockSize * i;
+				let peak = 0;
+
+				for (let j = 0; j < blockSize; j++) {
+					const value = Math.abs(channelData[start + j]);
+					peak = Math.max(peak, value);
+				}
+
+				peaks.push(peak);
+			}
+
+			// Calculate RMS level
+			let rmsSum = 0;
+			for (let i = 0; i < channelData.length; i++) {
+				rmsSum += channelData[i] * channelData[i];
+			}
+			const rmsLevel = Math.sqrt(rmsSum / channelData.length);
+			const rmsDb = 20 * Math.log10(rmsLevel);
+
+			// Finally, create or update sample in a new transaction
+			const writeTx = this.db.transaction("samples", "readwrite");
+			const sample: SampleMetadata = {
+				id: existingSample?.id ?? crypto.randomUUID(),
+				name: file.name,
+				filePath,
+				directoryId,
+				directoryPath: filePath.split("/").slice(0, -1).join("/"),
+				duration: audioBuffer.duration,
+				channels: audioBuffer.numberOfChannels,
+				sampleRate: audioBuffer.sampleRate,
+				rmsLevel: rmsDb,
+				peaks,
+				createdAt: existingSample?.createdAt ?? Date.now(),
+			};
+
+			await writeTx.store.put(sample);
+			await writeTx.done;
+		} catch (error) {
+			console.error("Error analyzing sample:", error);
+			throw error;
+		}
+	}
+
 	async upsertSample(
 		file: File,
 		filePath: string,
 		directoryId: string,
-		audioDetails: {
-			duration?: number;
-			channels?: number;
-			sampleRate?: number;
-		},
 	): Promise<void> {
-		if (!this.db) throw new Error("Database not initialized");
-
-		// Try to find existing sample with same path in this directory
-		const tx = this.db.transaction("samples", "readwrite");
-		const index = tx.store.index("by-directory");
-		const existingSamples = await index.getAll(directoryId);
-		const existingSample = existingSamples.find((s) => s.filePath === filePath);
-
-		const sample: SampleMetadata = {
-			id: existingSample?.id ?? crypto.randomUUID(),
-			name: file.name,
-			filePath,
-			directoryId,
-			directoryPath: filePath.split("/").slice(0, -1).join("/"),
-			duration: audioDetails.duration ?? existingSample?.duration ?? 0,
-			channels: audioDetails.channels ?? existingSample?.channels ?? 0,
-			sampleRate: audioDetails.sampleRate ?? existingSample?.sampleRate ?? 0,
-			rmsLevel: existingSample?.rmsLevel ?? 0,
-			createdAt: existingSample?.createdAt ?? Date.now(),
-		};
-
-		await tx.store.put(sample);
-		await tx.done;
+		await this.updateSampleDetails(file, filePath, directoryId);
 	}
 }
 
