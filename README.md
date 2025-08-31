@@ -1,3 +1,3 @@
 # https://op-xy-drum-builder.vercel.app/
 
-100% vibe coded with cursor
+With OP-XY Drum Builder you can create Drum Presets or Drum Racks with Custom samples for OP-XY.
