@@ -1,7 +1,7 @@
-import type { Metadata } from "next";
-import { Space_Mono, Inter } from "next/font/google";
-import "./globals.css";
 import { Analytics } from "@vercel/analytics/react";
+import type { Metadata } from "next";
+import { Inter, Space_Mono } from "next/font/google";
+import "./globals.css";
 import { Providers } from "./providers";
 
 const spaceMono = Space_Mono({
@@ -29,6 +29,7 @@ export default function RootLayout({
 }>) {
 	return (
 		<html lang="en" className={`${inter.variable} ${spaceMono.variable} dark`}>
+			<meta name="google-site-verification" content="8GG_Gw0npilqZ8NbLSdZe-rOtjPwlxjm8P8j2X7yzl0" />
 			<body className="antialiased">
 				<Providers>{children}</Providers>
 				<Analytics />
